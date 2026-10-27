@@ -27,6 +27,11 @@ ALIASES: dict[str, str] = {
     "item": "part_name",
     "itemname": "part_name",
     "description": "part_name",
+    "partdescription": "part_name",
+    "partdesc": "part_name",
+    "itemdescription": "part_name",
+    "product": "part_name",
+    "productname": "part_name",
     "component": "part_name",
     "part": "part_name",
     "oem": "oem_part_number",
@@ -58,8 +63,15 @@ ALIASES: dict[str, str] = {
     "applications": "fitment",
     "fits": "fitment",
     "compatibility": "fitment",
+    "carfrom": "fitment",
+    "car": "fitment",
+    "model": "fitment",
+    "vehiclefrom": "fitment",
     "condition": "condition",
     "state": "condition",
+    "newuse": "condition",
+    "newused": "condition",
+    "neworused": "condition",
     "bin": "bin_location",
     "binlocation": "bin_location",
     "location": "bin_location",
@@ -134,6 +146,7 @@ class ImportReport:
     skipped: int = 0
     errors: int = 0
     dry_run: bool = False
+    default_verified: bool = False
     columns_mapped: dict[str, str] = field(default_factory=dict)
     ignored_columns: list[str] = field(default_factory=list)
     results: list[RowResult] = field(default_factory=list)
@@ -146,6 +159,7 @@ class ImportReport:
             "skipped": self.skipped,
             "errors": self.errors,
             "dry_run": self.dry_run,
+            "verified": self.default_verified,
             "columns_mapped": self.columns_mapped,
             "ignored_columns": self.ignored_columns,
             "problems": [
@@ -204,6 +218,10 @@ def parse_quantity(raw: str) -> int:
 
 def parse_condition(raw: str) -> Condition:
     text = (raw or "").strip().lower()
+    if text in {"ex", "exchange", "exch"}:
+        # "EX" is a shop-specific shorthand seen in real stock sheets; treat it as
+        # reconditioned/exchange rather than new, and let the row be reviewed.
+        return Condition.refurbished
     if text.startswith(("used", "second", "2nd", "s/h")):
         return Condition.used
     if text.startswith(("refurb", "recon", "rebuilt")):
@@ -294,7 +312,13 @@ def _truthy(raw: str) -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "verified", "ok"}
 
 
-def _row_to_part(row: dict[str, str], mapping: dict[str, str], *, default_currency: str) -> PartCreate:
+def _row_to_part(
+    row: dict[str, str],
+    mapping: dict[str, str],
+    *,
+    default_currency: str,
+    default_verified: bool = False,
+) -> PartCreate:
     values = {canonical: row.get(column, "") for column, canonical in mapping.items()}
     name = str(values.get("part_name", "")).strip()
     if not name:
@@ -315,7 +339,7 @@ def _row_to_part(row: dict[str, str], mapping: dict[str, str], *, default_curren
         category=str(values.get("category", "")).strip()[:80],
         technical_notes=_split_notes(values.get("technical_notes", "")),
         image_path=str(values.get("image_path", "")).strip()[:300],
-        verified=_truthy(values.get("verified", "")),
+        verified=default_verified or _truthy(values.get("verified", "")),
     )
 
 
@@ -334,6 +358,7 @@ def import_csv(
     dry_run: bool = False,
     update_existing: bool = False,
     default_currency: str = "KES",
+    default_verified: bool = False,
     path: Path | None = None,
 ) -> ImportReport:
     """Import a CSV stock list.
@@ -363,7 +388,10 @@ def import_csv(
         return report
 
     mapping, ignored = map_headers(list(reader.fieldnames))
-    report = ImportReport(dry_run=dry_run, columns_mapped=mapping, ignored_columns=ignored)
+    report = ImportReport(
+        dry_run=dry_run, columns_mapped=mapping, ignored_columns=ignored,
+        default_verified=default_verified,
+    )
 
     if REQUIRED not in mapping.values():
         report.results.append(
@@ -383,7 +411,12 @@ def import_csv(
     for index, row in enumerate(reader, start=2):  # row 1 is the header
         report.rows_total += 1
         try:
-            payload = _row_to_part(row, mapping, default_currency=default_currency)
+            payload = _row_to_part(
+                row,
+                mapping,
+                default_currency=default_currency,
+                default_verified=default_verified,
+            )
         except ImportError_ as exc:
             report.errors += 1
             report.results.append(RowResult(row=index, status="error", message=str(exc)))

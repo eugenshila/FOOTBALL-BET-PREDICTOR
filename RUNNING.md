@@ -202,6 +202,16 @@ What it does:
    (add `--yes` to skip the prompt in a script);
 3. deletes the old stock, imports the new file, and prints the result.
 
+If the file is your own authoritative record and you do not want to tick each
+part off by hand, add `--verified`:
+
+```powershell
+python -m app.cli load-stock stock.csv --replace --verified
+```
+
+That is the only thing standing between a new part and a published card, so only
+use it once you have checked the numbers — see *known issues* in the handover.
+
 Then make sure the demo catalogue cannot come back:
 
 ```ini
@@ -217,6 +227,7 @@ Other options:
 | Command | Effect |
 |---|---|
 | `load-stock stock.csv` | merge into existing stock (no deletion) |
+| `load-stock stock.csv --verified` | also mark the rows verified (your own confirmed records) |
 | `load-stock stock.csv --replace --include-scans` | also clear scan history |
 | `reset-db --yes` | delete all inventory, keep nothing |
 | `reset-db --yes --reseed` | delete everything, put the demo parts back |

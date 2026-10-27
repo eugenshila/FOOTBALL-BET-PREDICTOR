@@ -211,10 +211,13 @@ def patch_part(part_id: int, payload: PartUpdate) -> InventoryPart:
 
 
 @app.delete("/api/parts/{part_id}", status_code=204)
-def delete_part(part_id: int) -> JSONResponse:
+def delete_part(part_id: int) -> Response:
     if not db.delete_part(part_id):
         raise HTTPException(status_code=404, detail="part not found")
-    return JSONResponse(status_code=204, content=None)
+    # 204 must not carry a body: use Response, not JSONResponse(content=None),
+    # which would serialise "null" and trip "Response content longer than
+    # Content-Length" in the HTTP server.
+    return Response(status_code=204)
 
 
 @app.post("/api/parts/{part_id}/adjust", response_model=InventoryPart)
@@ -399,6 +402,9 @@ async def import_parts(
     file: UploadFile = File(...),
     dry_run: bool = Query(True, description="Parse and report without writing anything"),
     update_existing: bool = Query(False, description="Fill blanks on records matching an OEM number"),
+    mark_verified: bool = Query(
+        False, description="Treat the file as the shop's own verified records"
+    ),
 ) -> dict:
     raw = await file.read()
     if not raw:
@@ -411,6 +417,7 @@ async def import_parts(
         dry_run=dry_run,
         update_existing=update_existing,
         default_currency=settings.currency,
+        default_verified=mark_verified,
     )
     payload = report.summary()
     payload["results"] = [

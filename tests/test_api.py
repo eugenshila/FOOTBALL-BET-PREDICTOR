@@ -137,7 +137,12 @@ def test_create_read_update_delete_part(client):
     assert patched["bin_location"] == "D9-B1"
     assert patched["unit_price"] == 4600
 
-    assert client.delete(f"/api/parts/{part_id}").status_code == 204
+    deleted = client.delete(f"/api/parts/{part_id}")
+    assert deleted.status_code == 204
+    # A 204 must carry no body at all. Returning JSONResponse(content=None)
+    # serialises "null", which some HTTP servers turn into a Content-Length
+    # mismatch ("Response content longer than Content-Length").
+    assert deleted.content == b""
     assert client.get(f"/api/parts/{part_id}").status_code == 404
 
 
@@ -309,3 +314,15 @@ def test_card_writes_are_atomic(client):
         p.name for p in EXPORT_DIR.glob(".*.tmp")
     ]
     assert leftovers == []
+
+
+def test_report_always_has_three_sections(client):
+    """Even an unmatched scan must print all three contract sections."""
+    from app.models import IdentificationReport
+    from app.report import render_report
+
+    markdown = render_report(IdentificationReport(part_name="Unmatched Thing"), None)
+    assert "### PART IDENTIFICATION REPORT" in markdown
+    assert "### WAREHOUSE & INVENTORY DETAILS" in markdown
+    assert "### WHATSAPP PROMOTIONAL POST GENERATOR" in markdown
+    assert "not linked to a stock record" in markdown

@@ -8,7 +8,11 @@ venv/
 .mypy_cache/
 
 # Runtime data (recreated on start; never commit shop data)
+# Shop data: never commit real inventory to a public repo
+data/imports/
 data/inventory.db
+# Shop data: never commit real inventory to a public repo
+data/imports/
 data/inventory.db-*
 data/feature_cache.json
 uploads/
