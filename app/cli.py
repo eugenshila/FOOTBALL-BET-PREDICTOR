@@ -12,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import cards, db, vision
+from . import cards, db, importers, vision
 from .catalog import match_part, seed_if_empty
 from .config import EXPORT_DIR, settings
 from .report import render_report
@@ -119,6 +119,37 @@ def cmd_cards(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import(args: argparse.Namespace) -> int:
+    _bootstrap()
+    raw = Path(args.csv).read_bytes()
+    report = importers.import_csv(
+        raw,
+        dry_run=args.dry_run,
+        update_existing=args.update,
+        default_currency=settings.currency,
+    )
+    summary = report.summary()
+    mode = "DRY RUN — nothing written" if args.dry_run else "imported"
+    print(f"{mode}: {summary['rows_total']} rows")
+    print(f"  created: {summary['created']}  updated: {summary['updated']}  "
+          f"skipped: {summary['skipped']}  errors: {summary['errors']}")
+    if summary["ignored_columns"]:
+        print(f"  ignored columns: {', '.join(summary['ignored_columns'])}")
+    for problem in summary["problems"]:
+        print(f"  ! row {problem['row']}: {problem['message']}")
+    if args.dry_run:
+        print("\nRe-run with --apply to write these changes.")
+    return 0 if summary["errors"] == 0 else 1
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    _bootstrap()
+    target = Path(args.out)
+    target.write_text(importers.export_csv(), encoding="utf-8")
+    print(f"· wrote {target}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="parts", description="Spare-parts ID engine CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -143,6 +174,18 @@ def build_parser() -> argparse.ArgumentParser:
     card_cmd.add_argument("--formats", default="story,square,wide")
     card_cmd.add_argument("--headline", default="")
     card_cmd.set_defaults(func=cmd_cards)
+
+    importer = sub.add_parser("import-csv", help="bulk load a stock list")
+    importer.add_argument("csv")
+    importer.add_argument("--apply", dest="dry_run", action="store_false",
+                          help="write the rows (default is a dry run)")
+    importer.add_argument("--update", action="store_true",
+                          help="fill blanks on records that already match an OEM number")
+    importer.set_defaults(func=cmd_import, dry_run=True)
+
+    exporter = sub.add_parser("export-csv", help="dump inventory to CSV")
+    exporter.add_argument("--out", default="inventory.csv")
+    exporter.set_defaults(func=cmd_export)
     return parser
 
 

@@ -45,9 +45,14 @@
           </div>
           <input id="file-input" type="file" accept="image/*" />
         </div>
-        <div class="row gap wrap">
-          <button id="btn-camera" class="btn ghost">📷 Camera</button>
-          <button id="btn-identify" class="btn primary" disabled>Identify part</button>
+        <div class="row gap wrap between">
+          <div class="row gap wrap">
+            <button id="btn-camera" class="btn ghost">📷 Camera</button>
+            <button id="btn-identify" class="btn primary" disabled>Identify part</button>
+          </div>
+          <label class="check auto-toggle" title="Run identification as soon as a photo is added">
+            <input type="checkbox" id="auto-detect" checked /> Auto-detect on upload
+          </label>
         </div>
         <div id="demo-block" class="demo-block">
           <p class="muted small">No photo handy? Try a sample:</p>
@@ -63,6 +68,14 @@
           <p class="muted small">The report shows part name, OEM and cross-reference numbers, vehicle fitment and the service notes a fitter needs before touching the car.</p>
         </div>
         <div id="report" class="report" hidden></div>
+        <div id="sources-block" class="sources" hidden>
+          <div class="panel-head">
+            <h3 class="sources-title">Checked on the web</h3>
+            <span id="lens-link"></span>
+          </div>
+          <ul id="source-list" class="source-list"></ul>
+          <p id="query-line" class="muted small"></p>
+        </div>
       </div>
     </div>
 
@@ -80,9 +93,12 @@
     <div class="panel">
       <div class="panel-head">
         <h2 class="panel-title">Stock</h2>
-        <div class="row gap">
+        <div class="row gap wrap">
           <input id="search" class="input" type="search" placeholder="Search name, OEM, bin, vehicle…" />
           <button id="btn-new-part" class="btn">＋ New part</button>
+          <button id="btn-import" class="btn ghost">⇪ Import CSV</button>
+          <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ Export</a>
+          <input id="csv-input" type="file" accept=".csv,text/csv" hidden />
         </div>
       </div>
       <div class="table-wrap">
@@ -97,6 +113,13 @@
         </table>
       </div>
       <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
+      <div id="import-block" class="import-block" hidden>
+        <div class="panel-head">
+          <h3 class="sources-title">CSV import</h3>
+          <div class="row gap" id="import-actions"></div>
+        </div>
+        <div id="import-summary"></div>
+      </div>
     </div>
   </section>
 

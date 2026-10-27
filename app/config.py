@@ -49,6 +49,16 @@ class Settings:
     ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
     ollama_model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "llava"))
 
+    # Google Search grounding: lets the vision model *search* to identify the
+    # part and find part numbers, and returns the pages it used.
+    grounding_enabled: bool = field(default_factory=lambda: _env_bool("SEARCH_GROUNDING", True))
+    grounding_model: str = field(
+        default_factory=lambda: os.getenv("GROUNDING_MODEL", "gemini-2.5-flash")
+    )
+    # Public URL of this deployment, needed to build one-tap Google Lens links.
+    # Auto-detected from the request when empty.
+    public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
+
     # Shop identity used on generated cards.
     shop_name: str = field(default_factory=lambda: os.getenv("SHOP_NAME", "SHILA AUTO PARTS"))
     shop_tagline: str = field(default_factory=lambda: os.getenv("SHOP_TAGLINE", "OEM & GENUINE SPARE PARTS"))

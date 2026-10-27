@@ -58,6 +58,13 @@ class PartNumber(BaseModel):
     confidence: Confidence = Confidence.medium
 
 
+class SearchSource(BaseModel):
+    """A web page the identification was grounded in (Google Search results)."""
+
+    title: str = ""
+    url: str = ""
+
+
 class IdentificationReport(BaseModel):
     """Module 1 output: what the engine believes the part is."""
 
@@ -76,6 +83,10 @@ class IdentificationReport(BaseModel):
     needs_manual_review: bool = True
     warnings: list[str] = Field(default_factory=list)
     raw_model_output: str | None = None
+    # Provenance: set when the model was allowed to search the web.
+    grounded: bool = False
+    search_queries: list[str] = Field(default_factory=list)
+    sources: list[SearchSource] = Field(default_factory=list)
 
     def primary_fitment_label(self) -> str:
         if not self.fitment:
@@ -210,10 +221,13 @@ class CardResult(BaseModel):
 class IdentifyResponse(BaseModel):
     scan_id: int | None = None
     image_path: str
+    image_url: str = ""
     report: IdentificationReport
     matched_part: InventoryPart | None = None
     candidates: list[InventoryPart] = Field(default_factory=list)
     report_markdown: str = ""
+    lens_url: str = ""
+    google_search_url: str = ""
 
 
 class DemoImage(BaseModel):

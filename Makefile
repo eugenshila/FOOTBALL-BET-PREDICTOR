@@ -1,4 +1,4 @@
-.PHONY: install run test cards cli clean
+.PHONY: install run test cards cli import export clean
 
 install:
 	python3 -m venv .venv
@@ -16,6 +16,13 @@ cards:
 
 cli:
 	./.venv/bin/python -m app.cli list
+
+# Dry-run a stock list first: make import CSV=stock.csv
+import:
+	./.venv/bin/python -m app.cli import-csv $(CSV)
+
+export:
+	./.venv/bin/python -m app.cli export-csv --out inventory.csv
 
 clean:
 	rm -rf __pycache__ app/__pycache__ tests/__pycache__ .pytest_cache uploads/* exports/*

@@ -167,6 +167,19 @@ def find_by_number(number: str, path: Path | None = None) -> InventoryPart | Non
     return None
 
 
+def find_by_name(name: str, path: Path | None = None) -> InventoryPart | None:
+    """Case/space-insensitive exact match on the part name."""
+    needle = " ".join((name or "").split()).lower()
+    if not needle:
+        return None
+    with connect(path) as conn:
+        rows = conn.execute("SELECT * FROM parts").fetchall()
+    for row in rows:
+        if " ".join((row["part_name"] or "").split()).lower() == needle:
+            return _row_to_part(row)
+    return None
+
+
 def create_part(payload: PartCreate, *, path: Path | None = None, log_movement: bool = True) -> InventoryPart:
     stamp = _now()
     with connect(path) as conn:
@@ -176,7 +189,7 @@ def create_part(payload: PartCreate, *, path: Path | None = None, log_movement: 
                                   category, technical_notes, image_path, verified, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                payload.part_name.strip(),
+                " ".join(payload.part_name.split()),
                 payload.oem_part_number.strip(),
                 json.dumps(payload.alternate_numbers),
                 json.dumps(payload.superseded_numbers),

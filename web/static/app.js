@@ -120,11 +120,14 @@ function renderProviderBadge(health) {
   const badge = $("#provider-badge");
   const provider = health.vision_provider;
   const isOffline = provider === "offline";
-  badge.textContent = isOffline ? "Offline matcher" : `${provider} vision`;
+  const grounded = Boolean(health.grounding_active);
+  badge.textContent = health.vision_label || provider;
   badge.className = `badge ${isOffline ? "offline" : "live"}`;
   badge.title = isOffline
-    ? "No vision model key configured — identification compares the photo against your catalogue images. Set OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY (or run Ollama) for real vision identification."
-    : `Vision model: ${provider}. Part numbers still need EPC verification before quoting.`;
+    ? "No vision key configured — identification compares the photo against your catalogue images. Add GEMINI_API_KEY (free tier) to enable Gemini + Google Search identification, or run Ollama for a local model."
+    : grounded
+      ? `Gemini is identifying the part with Google Search grounding (${health.grounding_model}) and citing the pages it used. Confirm numbers in the EPC before quoting.`
+      : `Vision model: ${provider}. Part numbers still need EPC verification before quoting.`;
 }
 
 function renderStats(stats) {
@@ -154,6 +157,13 @@ async function loadDemoImages() {
 }
 
 /* ── capture ──────────────────────────────────────────────── */
+let identifyToken = 0;
+
+function autoDetectEnabled() {
+  const toggle = $("#auto-detect");
+  return Boolean(toggle && toggle.checked);
+}
+
 function selectFile(file) {
   state.selectedFile = file;
   const preview = $("#preview");
@@ -163,6 +173,12 @@ function selectFile(file) {
   $("#btn-identify").disabled = false;
   $("#identify-status").textContent = `${file.name || "photo"} ready — ${(file.size / 1024).toFixed(0)} KB`;
   $("#identify-status").className = "status";
+
+  if (autoDetectEnabled()) {
+    // Auto-detect: identification starts the moment a photo lands. The token
+    // guards against a fast second upload racing the first response.
+    identify();
+  }
 }
 
 function wireDropzone() {
@@ -196,9 +212,13 @@ function wireDropzone() {
 
 async function identify() {
   if (!state.selectedFile) return;
+  const token = ++identifyToken;
   const status = $("#identify-status");
+  const grounded = state.config?.vision?.grounding_active;
   status.className = "status busy";
-  status.textContent = "Analysing the photo…";
+  status.textContent = grounded
+    ? "Identifying and searching the web for part numbers…"
+    : "Analysing the photo…";
   $("#btn-identify").disabled = true;
 
   const form = new FormData();
@@ -206,21 +226,53 @@ async function identify() {
 
   try {
     const result = await api("/api/identify", { method: "POST", body: form });
+    if (token !== identifyToken) return; // a newer upload superseded this one
     state.lastScan = result;
     renderReport(result);
+    renderSources(result);
     renderMatch(result);
     status.className = "status";
     const conf = result.report.overall_confidence;
-    status.textContent = `Done — ${conf} confidence via ${result.report.provider}.`;
+    const via = result.report.grounded ? `${result.report.provider} + web search` : result.report.provider;
+    status.textContent = `Done — ${conf} confidence via ${via}.`;
     await loadParts();
     populateStudioSelect();
   } catch (error) {
+    if (token !== identifyToken) return;
     status.className = "status error";
     status.textContent = error.message;
     toast(error.message, true);
   } finally {
-    $("#btn-identify").disabled = false;
+    if (token === identifyToken) $("#btn-identify").disabled = false;
   }
+}
+
+function renderSources(result) {
+  const block = $("#sources-block");
+  const report = result.report || {};
+  const sources = report.sources || [];
+  const queries = report.search_queries || [];
+  const lens = result.lens_url;
+
+  if (!sources.length && !queries.length && !lens) { block.hidden = true; return; }
+
+  $("#source-list").innerHTML = sources.map((source) => {
+    let domain = "";
+    try { domain = new URL(source.url).hostname.replace(/^www\./, ""); } catch { domain = ""; }
+    return `<li>
+      <a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || source.url)}</a>
+      ${domain ? `<span class="domain">${escapeHtml(domain)}</span>` : ""}
+    </li>`;
+  }).join("");
+
+  $("#query-line").textContent = queries.length
+    ? `Searches run: ${queries.map((q) => `"${q}"`).join(" · ")}`
+    : (sources.length ? "" : "No vision provider configured — open the photo in Google Lens to identify it.");
+
+  $("#lens-link").innerHTML = lens
+    ? `<a class="btn ghost small-btn" href="${escapeHtml(lens)}" target="_blank" rel="noopener noreferrer">🔍 Reverse image search</a>`
+    : "";
+  block.hidden = false;
 }
 
 function renderReport(result) {
@@ -538,6 +590,69 @@ async function generateCards() {
   }
 }
 
+/* ── CSV import ───────────────────────────────────────────── */
+let pendingCsv = null;
+
+async function sendCsv(file, dryRun) {
+  const block = $("#import-block");
+  const summary = $("#import-summary");
+  block.hidden = false;
+  summary.innerHTML = `<p class="status busy">${dryRun ? "Checking" : "Importing"} ${escapeHtml(file.name)}…</p>`;
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const query = `?dry_run=${dryRun}&update_existing=false`;
+    const result = await api(`/api/inventory/import${query}`, { method: "POST", body: form });
+    renderImportSummary(result, file, dryRun);
+    if (!dryRun) {
+      pendingCsv = null;
+      await loadParts($("#search").value);
+      populateStudioSelect();
+      toast(`Imported ${result.created} part(s)`);
+    } else {
+      pendingCsv = file;
+    }
+  } catch (error) {
+    summary.innerHTML = `<p class="status error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderImportSummary(result, file, dryRun) {
+  const summary = $("#import-summary");
+  const actions = $("#import-actions");
+  const stat = (label, value, cls = "") =>
+    `<div class="${cls}"><strong>${value}</strong>${label}</div>`;
+
+  summary.innerHTML = `
+    <p class="muted small">${escapeHtml(file.name)} · ${result.rows_total} rows read${dryRun ? " · dry run, nothing written yet" : ""}</p>
+    <div class="import-stats">
+      ${stat("new parts", result.created, "good")}
+      ${stat("updated", result.updated)}
+      ${stat("already in stock", result.skipped)}
+      ${stat("problems", result.errors, result.errors ? "bad" : "")}
+    </div>
+    ${result.problems.length ? `<ul class="import-problems">${result.problems.map((p) => `<li>row ${p.row}: ${escapeHtml(p.message)}</li>`).join("")}</ul>` : ""}
+    <p class="import-cols">Columns mapped: ${Object.entries(result.columns_mapped).map(([from, to]) => `${escapeHtml(from)} → ${escapeHtml(to)}`).join(", ") || "none"}${result.ignored_columns.length ? ` · ignored: ${result.ignored_columns.map(escapeHtml).join(", ")}` : ""}</p>`;
+
+  actions.innerHTML = dryRun
+    ? `<button class="btn primary small-btn" id="btn-apply-import">Apply import</button>
+       <button class="btn ghost small-btn" id="btn-cancel-import">Cancel</button>`
+    : `<button class="btn ghost small-btn" id="btn-cancel-import">Dismiss</button>`;
+
+  if (dryRun) {
+    $("#btn-apply-import").addEventListener("click", () => {
+      if (pendingCsv) sendCsv(pendingCsv, false);
+    });
+  }
+  $("#btn-cancel-import").addEventListener("click", () => {
+    pendingCsv = null;
+    $("#import-block").hidden = true;
+    $("#csv-input").value = "";
+  });
+}
+
 /* ── navigation ───────────────────────────────────────────── */
 function switchView(name) {
   $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
@@ -553,6 +668,12 @@ function wireUi() {
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
   $("#btn-new-part").addEventListener("click", () => openDrawer({}));
+  $("#btn-import").addEventListener("click", () => $("#csv-input").click());
+  $("#csv-input").addEventListener("change", (event) => {
+    const file = event.target.files[0];
+    if (file) sendCsv(file, true);
+    event.target.value = "";
+  });
   $("#btn-generate").addEventListener("click", generateCards);
   $("#studio-part").addEventListener("change", () => { /* wait for the button */ });
   $("#btn-copy").addEventListener("click", async () => {

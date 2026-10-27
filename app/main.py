@@ -11,13 +11,13 @@ from pathlib import Path
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, vision
+from . import cards, db, importers, links, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -89,10 +89,14 @@ def index() -> HTMLResponse:
 
 @app.get("/api/health")
 def health() -> dict:
+    provider = vision.describe()
     return {
         "status": "ok",
-        "vision_provider": vision.resolve_provider_name(),
-        "providers_available": vision.available_providers(),
+        "vision_provider": provider["provider"],
+        "vision_label": provider["label"],
+        "grounding_active": provider["grounding_active"],
+        "grounding_model": provider["grounding_model"],
+        "providers_available": provider["available"],
         "shop": settings.shop_name,
         "whatsapp": settings.whatsapp_number,
         "currency": settings.currency,
@@ -227,7 +231,7 @@ def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
 
 
 @app.post("/api/identify", response_model=IdentifyResponse)
-async def identify(file: UploadFile = File(...)) -> IdentifyResponse:
+async def identify(request: Request, file: UploadFile = File(...)) -> IdentifyResponse:
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=422, detail="empty upload")
@@ -261,9 +265,16 @@ async def identify(file: UploadFile = File(...)) -> IdentifyResponse:
     scan_id = db.save_scan(image_path, report.model_dump_json(), matched.id if matched else None)
     caption = cards.caption_for(matched) if matched else ""
 
+    image_url = f"/media/uploads/{path.name}"
+    base = links.resolve_base_url(_request_origin(request))
+    lens, gimages = links.links_for(image_url, base)
+
     return IdentifyResponse(
         scan_id=scan_id,
         image_path=image_path,
+        image_url=image_url,
+        lens_url=lens,
+        google_search_url=gimages,
         report=report,
         matched_part=matched,
         candidates=[m.part for m in candidates],
@@ -330,6 +341,62 @@ def part_report(part_id: int) -> dict:
     )
     caption = cards.caption_for(part)
     return {"markdown": render_report(report, part, caption=caption), "caption": caption}
+
+
+def _request_origin(request: Request) -> str:
+    """Reconstruct our public origin, honouring proxy headers."""
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+    host = forwarded_host or request.headers.get("host", "")
+    scheme = forwarded_proto or request.url.scheme
+    if not host:
+        return ""
+    return f"{scheme}://{host}"
+
+
+# --- bulk import / export --------------------------------------------------
+@app.post("/api/inventory/import")
+async def import_parts(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True, description="Parse and report without writing anything"),
+    update_existing: bool = Query(False, description="Fill blanks on records matching an OEM number"),
+) -> dict:
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="empty file")
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV larger than 8 MB")
+
+    report = importers.import_csv(
+        raw,
+        dry_run=dry_run,
+        update_existing=update_existing,
+        default_currency=settings.currency,
+    )
+    payload = report.summary()
+    payload["results"] = [
+        {
+            "row": r.row,
+            "status": r.status,
+            "part_name": r.part_name,
+            "oem_part_number": r.oem_part_number,
+            "part_id": r.part_id,
+            "message": r.message,
+        }
+        for r in report.results[:500]
+    ]
+    payload["stats"] = db.stats()
+    return payload
+
+
+@app.get("/api/inventory.csv", response_class=PlainTextResponse)
+def export_parts() -> PlainTextResponse:
+    csv_text = importers.export_csv()
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="inventory.csv"'},
+    )
 
 
 # --- promotional cards -----------------------------------------------------
@@ -447,6 +514,8 @@ def public_config() -> dict:
             for f in cards.FORMATS.values()
         ],
         "max_upload_mb": settings.max_upload_mb,
+        "vision": vision.describe(),
+        "lens_supported": bool(links.resolve_base_url("")),
     }
 
 

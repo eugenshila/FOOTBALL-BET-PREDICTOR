@@ -297,3 +297,34 @@ pre.caption { background: #14171b; border: 1px solid var(--edge); border-left: 3
   box-shadow: 0 16px 40px -16px #000; font-size: 14px; max-width: 90vw;
 }
 .toast.error { border-left-color: var(--red); }
+
+/* ── auto-detect toggle & sources ─────────────────────────── */
+.auto-toggle { white-space: nowrap; font-size: 12px; }
+.auto-toggle input { accent-color: var(--red); width: 15px; height: 15px; }
+.sources { margin-top: 18px; border-top: 1px solid var(--edge); padding-top: 14px; }
+.sources-title {
+  font-family: var(--cond); font-weight: 700; font-size: 13px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--dim); margin: 0 0 10px;
+}
+.source-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.source-list li { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.source-list li::before { content: "↗"; color: var(--red); font-size: 11px; }
+.source-list a { color: #9fc6ff; text-decoration: none; border-bottom: 1px solid transparent; }
+.source-list a:hover { border-bottom-color: #9fc6ff; }
+.source-list .domain { color: var(--faint); font-size: 11px; letter-spacing: .04em; }
+#lens-link a { text-decoration: none; }
+#query-line { margin: 10px 0 0; }
+
+/* ── CSV import ───────────────────────────────────────────── */
+.import-block {
+  margin-top: 18px; border: 1px solid var(--edge); border-radius: 8px;
+  padding: 14px 16px; background: #14171b;
+}
+.import-block .sources-title { margin-bottom: 6px; }
+.import-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 12px; }
+.import-stats div { font-size: 12px; color: var(--faint); letter-spacing: .1em; text-transform: uppercase; }
+.import-stats strong { display: block; font-family: var(--cond); font-size: 24px; color: var(--silver); letter-spacing: .02em; }
+.import-stats .bad strong { color: #ff7b7b; }
+.import-stats .good strong { color: var(--green); }
+.import-problems { font-size: 12px; color: #ff9a9a; margin: 8px 0 0; padding-left: 16px; }
+.import-cols { font-size: 11px; color: var(--faint); margin-top: 10px; }

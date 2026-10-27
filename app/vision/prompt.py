@@ -98,3 +98,39 @@ RESPONSE_SCHEMA: dict = {
         "notes": {"type": "string"},
     },
 }
+
+
+# ── Search-grounded variant ───────────────────────────────────────────────
+# Same output contract and the same honesty rules, but the model may consult the
+# web. Grounding is what makes an OEM number trustworthy: it has to come from a
+# catalogue page, not from the model's memory of shapes.
+
+GROUNDED_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+## You may search the web
+You have a Google Search tool. Use it - do not answer from memory alone.
+
+Search strategy (be economical: at most 4 searches):
+1. Identify the part from its geometry, casting marks, connectors and markings.
+2. Search "<part name> OEM number <brand/engine if visible>" or
+   "<part name> part number <vehicle>".
+3. Prefer manufacturer/EPC/dealer catalogue pages and major parts retailers
+   (Mopar, RockAuto, PartsGeek, AutoZone, dealer parts sites) over forums.
+4. Only report a number that appears on a page you found. Never fill a number
+   from memory once you have searched - if the search did not confirm it, leave
+   oem_part_number empty and set number_confidence "low".
+5. Copy numbers exactly as the source prints them, including revision suffixes
+   (AA, AB, AH...) - those suffixes decide whether the part fits.
+
+When sources disagree, say so in technical_notes and keep the majority/most
+specific application. Record which vehicle each number is for when they differ.
+
+Grounding rules:
+- A search result is evidence, not proof. If the top results describe different
+  parts, say the identification is ambiguous and lower the confidence.
+- Never cite a page you did not actually use.
+"""
+
+GROUNDED_USER_PROMPT = """Identify this automotive component. Search the web to confirm the
+OEM part number and its cross-references, then return the JSON object described in your
+instructions. If the part number cannot be confirmed from a real source, leave it empty."""
