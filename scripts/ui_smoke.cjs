@@ -22,6 +22,24 @@ function check(name, ok, detail = "") {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Unique suffix so repeated runs never collide with leftovers.
+const RUN = Date.now().toString(36).slice(-5).toUpperCase();
+const created = [];
+async function makePart(body) {
+  const part = await (await fetch(`${BASE}/api/parts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })).json();
+  if (part.id) created.push(part.id);
+  return part;
+}
+async function cleanup() {
+  for (const id of created.splice(0)) {
+    await fetch(`${BASE}/api/parts/${id}`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
 async function waitFor(label, fn, timeout = 25000, interval = 120) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -79,6 +97,15 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
     if (!jsdomGaps.some((re) => re.test(msg))) consoleErrors.push(msg);
   };
 
+  // Idempotent: remove anything a previous interrupted run left behind.
+  const strays = await (await fetch(`${BASE}/api/parts?limit=1000`)).json();
+  for (const part of strays) {
+    if (/^(UIC|UIU|UIT|UIP)-/.test(part.oem_part_number || "")) {
+      await fetch(`${BASE}/api/parts/${part.id}`, { method: "DELETE" });
+      console.log(`  (removed leftover test part ${part.oem_part_number})`);
+    }
+  }
+
   // boot the app exactly as a browser would
   window.eval(appJs);
 
@@ -121,15 +148,18 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
     reportText.includes("PART IDENTIFICATION REPORT") &&
     reportText.includes("WAREHOUSE & INVENTORY DETAILS") &&
     reportText.includes("WHATSAPP PROMOTIONAL POST GENERATOR"));
+  // Sample photos come from the demo catalogue, so with a real inventory the
+  // scan legitimately matches nothing - the UI must say so rather than break.
+  check("unmatched scans explain the next step",
+    doc.querySelector("#match-block").hidden === false &&
+    /no stock match|not in inventory/i.test(doc.querySelector("#match-body").textContent),
+    doc.querySelector("#match-badge")?.textContent?.trim());
   check("report shows the identified part name",
     reportText.includes("Part Name"));
   check("preview image is shown after upload",
     doc.querySelector("#preview").hidden === false &&
     String(doc.querySelector("#preview").src).startsWith("blob:"));
-  check("match block offers promo cards",
-    doc.querySelector("#match-block").hidden === false &&
-    Boolean(doc.querySelector("#btn-match-cards")),
-    doc.querySelector("#match-badge")?.textContent?.trim());
+
 
   // sources block: no public URL on localhost, so it should stay hidden
   check("sources block hidden when there is nothing to cite (localhost)",
@@ -199,37 +229,57 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   check("rows show OEM, bin and price",
     firstRow.textContent.includes("KES") || /\d/.test(firstRow.textContent));
 
-  // search filter
+  // search filter — derive the query from the data so this works with any
+  // inventory, not just the demo catalogue
   const search = doc.querySelector("#search");
-  search.value = "Durango";
+  const sampleOem = firstRow.querySelectorAll("td")[1].textContent.trim();
+  search.value = sampleOem === "—" ? firstRow.querySelector(".part-name").textContent.split(" ")[0] : sampleOem;
   search.dispatchEvent(new window.Event("input", { bubbles: true }));
   await waitFor("filtered rows", () => {
     const n = doc.querySelectorAll("#parts-body tr").length;
     return n > 0 && n < rows;
   }, 15000);
   check("search filters the table", doc.querySelectorAll("#parts-body tr").length < rows,
-    `${doc.querySelectorAll("#parts-body tr").length} of ${rows}`);
+    `query "${search.value}" -> ${doc.querySelectorAll("#parts-body tr").length} of ${rows}`);
   search.value = "";
   search.dispatchEvent(new window.Event("input", { bubbles: true }));
   await waitFor("unfiltered rows", () => doc.querySelectorAll("#parts-body tr").length === rows);
 
   // ── 5. promo studio ────────────────────────────────────────────────────────
-  doc.querySelector('.tab[data-view="studio"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-  await waitFor("studio options", () => doc.querySelectorAll("#studio-part option").length > 0);
-  check("studio lists every part", doc.querySelectorAll("#studio-part option").length === rows,
-    `${doc.querySelectorAll("#studio-part option").length} options`);
+  // Card generation only works for *verified* records, so the test creates its
+  // own probe part instead of depending on the shop's verification state.
+  const probe = await makePart({
+      part_name: "UI Card Probe",
+      oem_part_number: `UIC-${RUN}`,
+      bin_location: "T1-T1",
+      quantity: 4,
+      unit_price: 1500,
+      verified: true,
+      image_path: "assets/seed/pcv-valve.jpg",
+      fitment_text: "Jeep Wrangler 3.6L 2012-2018",
+  });
 
+  // Re-open Inventory first so the new probe part is loaded into the studio list.
+  doc.querySelector('.tab[data-view="inventory"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await waitFor("probe in inventory", () => doc.querySelectorAll("#parts-body tr").length === rows + 1);
+  doc.querySelector('.tab[data-view="studio"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await waitFor("studio options", () => doc.querySelectorAll("#studio-part option").length === rows + 1);
+  check("studio lists every part",
+    doc.querySelectorAll("#studio-part option").length === rows + 1,
+    `${doc.querySelectorAll("#studio-part option").length} options for ${rows} parts`);
+
+  doc.querySelector("#studio-part").value = String(probe.id);
   doc.querySelector("#btn-generate").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   await waitFor("cards rendered", () => doc.querySelectorAll("#card-output .card-item img").length > 0, 40000);
   const cards = [...doc.querySelectorAll("#card-output .card-item")];
   check("all three card formats are generated", cards.length === 3, `${cards.length} cards`);
   const meta = cards.map((c) => c.querySelector(".card-meta span").textContent);
-  check("card dimensions are labelled", meta.some((m) => m.includes("1080×1920")) && meta.some((m) => m.includes("1080×1080")),
+  check("card dimensions are labelled",
+    meta.some((m) => m.includes("1080×1920")) && meta.some((m) => m.includes("1080×1080")),
     meta.join(" | "));
   check("cards have download links",
     cards.every((c) => c.querySelector('a[download]')?.getAttribute("href")?.startsWith("/api/cards/download/")));
-  check("caption is generated", doc.querySelector("#caption-text").textContent.includes("WHATSAPP")
-    || doc.querySelector("#caption-text").textContent.includes("WhatsApp"));
+  check("caption is generated", /whatsapp/i.test(doc.querySelector("#caption-text").textContent));
 
   const cardSrc = cards[0].querySelector("img").getAttribute("src");
   const cardResp = await fetch(new URL(cardSrc, BASE));
@@ -242,6 +292,22 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   doc.querySelector("#btn-generate").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   await waitFor("four cards", () => doc.querySelectorAll("#card-output .card-item").length === 4, 40000);
   check("bin label format renders", doc.querySelectorAll("#card-output .card-item").length === 4);
+
+  // an unverified record must be refused, with the reason shown in the UI
+  const unverified = await makePart({ part_name: "UI Unverified Probe", oem_part_number: `UIU-${RUN}`, quantity: 1 });
+  doc.querySelector('.tab[data-view="inventory"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await waitFor("unverified probe loaded", () => doc.querySelectorAll("#parts-body tr").length === rows + 2);
+  doc.querySelector('.tab[data-view="studio"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await waitFor("unverified probe in studio",
+    () => [...doc.querySelectorAll("#studio-part option")].some((o) => o.value === String(unverified.id)));
+  doc.querySelector("#studio-part").value = String(unverified.id);
+  doc.querySelector("#btn-generate").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await waitFor("unverified refusal shown",
+    () => /verified/i.test(doc.querySelector("#studio-status").textContent), 20000);
+  check("unverified part is refused in the studio",
+    /verified/i.test(doc.querySelector("#studio-status").textContent),
+    doc.querySelector("#studio-status").textContent.slice(0, 80));
+  await fetch(`${BASE}/api/parts/${unverified.id}`, { method: "DELETE" });
 
   // ── 6. CSV import (dry run through the real UI path) ───────────────────────
   doc.querySelector('.tab[data-view="inventory"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -270,8 +336,9 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
     JSON.stringify(imported.fitment?.[0] || {}));
   check("imported price parsed", imported.unit_price === 1200, String(imported.unit_price));
 
-  // clean up the part created by this run
+  // clean up the parts created by this run
   await fetch(`${BASE}/api/parts/${imported.id}`, { method: "DELETE" });
+  await cleanup();
 
   // ── 7. new-part drawer ─────────────────────────────────────────────────────
   doc.querySelector("#btn-new-part").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -313,13 +380,15 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   check("no uncaught page errors or console errors", consoleErrors.length === 0,
     consoleErrors.slice(0, 3).join(" | "));
 
+  await cleanup();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} UI checks passed`);
   if (failed.length) {
     console.log("FAILURES:\n" + failed.map((f) => ` · ${f.name} — ${f.detail}`).join("\n"));
   }
   process.exit(failed.length ? 1 : 0);
-})().catch((error) => {
+})().catch(async (error) => {
+  await cleanup();
   console.error("HARNESS ERROR:", error.message);
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed before the harness stopped`);

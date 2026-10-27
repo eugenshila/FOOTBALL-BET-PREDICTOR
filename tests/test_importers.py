@@ -311,3 +311,54 @@ def test_cli_bootstrap_respects_seed_demo_data(monkeypatch, capsys):
     cli._bootstrap()
     assert called["n"] == 0
     assert "seeded demo catalogue" not in capsys.readouterr().out
+
+
+def test_real_world_shop_sheet_headers_are_mapped():
+    """Regression: a real stock sheet used 'PART NUMBER' / 'PART DESCRIPTION'."""
+    mapping, ignored = map_headers(
+        ["PART NUMBER", "PART DESCRIPTION", "LOCATION", "NEW/USE", "CAR FROM", "QUANTITY", "CONDITION"]
+    )
+    assert mapping["PART NUMBER"] == "oem_part_number"
+    assert mapping["PART DESCRIPTION"] == "part_name"
+    assert mapping["LOCATION"] == "bin_location"
+    assert mapping["NEW/USE"] == "condition"
+    assert mapping["CAR FROM"] == "fitment"
+    assert mapping["QUANTITY"] == "quantity"
+    # The sheet carries both NEW/USE and CONDITION; the first wins and the
+    # duplicate is reported instead of silently overwriting it.
+    assert mapping["NEW/USE"] == "condition"
+    assert "CONDITION" in ignored
+
+
+def test_exchange_shorthand_maps_to_refurbished():
+    from app.importers import parse_condition
+    from app.models import Condition
+
+    assert parse_condition("EX") is Condition.refurbished
+    assert parse_condition("New") is Condition.new
+    assert parse_condition("Used") is Condition.used
+
+
+def test_import_can_mark_rows_verified(client):
+    """Shop-asserted rows should be publishable without editing 40 records."""
+    before = client.get("/api/parts", params={"q": "VPROBE-1"}).json()
+    assert before == []
+    client.post(
+        "/api/inventory/import?dry_run=false&mark_verified=true",
+        files={"file": ("v.csv", io.BytesIO(b"Part Name,OEM,Qty\nVerified Probe,VPROBE-1,3\n"), "text/csv")},
+    )
+    part = client.get("/api/parts", params={"q": "VPROBE-1"}).json()[0]
+    assert part["verified"] is True
+    assert client.post("/api/cards", json={"part_id": part["id"], "formats": ["square"]}).status_code == 200
+    client.delete(f"/api/parts/{part['id']}")
+
+
+def test_import_stays_unverified_by_default(client):
+    client.post(
+        "/api/inventory/import?dry_run=false",
+        files={"file": ("u.csv", io.BytesIO(b"Part Name,OEM\nUnverified Probe,UPROBE-1\n"), "text/csv")},
+    )
+    part = client.get("/api/parts", params={"q": "UPROBE-1"}).json()[0]
+    assert part["verified"] is False
+    assert client.post("/api/cards", json={"part_id": part["id"], "formats": ["square"]}).status_code == 409
+    client.delete(f"/api/parts/{part['id']}")

@@ -294,6 +294,7 @@ What it handles from real-world files:
 | `GET` | `/api/cards/download/{file}` | Download a rendered PNG |
 | `POST` | `/api/inventory/import?dry_run=&update_existing=` | Import a CSV stock list |
 | `GET` | `/api/inventory.csv` | Export inventory as CSV |
+| `POST` | `/api/inventory/import?...&mark_verified=true` | Import and mark rows verified |
 | `GET` | `/api/scans` | Scan history |
 | `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info (health includes database dialect/version) |
 | `HEAD` | `/` · `/api/health` | Liveness probes (no 405s for uptime monitors) |

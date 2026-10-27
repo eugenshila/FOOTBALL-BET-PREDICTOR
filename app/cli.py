@@ -129,6 +129,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         update_existing=args.update,
         default_currency=settings.currency,
+        default_verified=args.verified,
     )
     summary = report.summary()
     mode = "DRY RUN — nothing written" if args.dry_run else "imported"
@@ -339,6 +340,7 @@ def cmd_load_stock(args: argparse.Namespace) -> int:
         dry_run=False,
         update_existing=not args.replace,
         default_currency=settings.currency,
+        default_verified=args.verified,
     )
     final = db.stats()
     print(
@@ -385,6 +387,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="write the rows (default is a dry run)")
     importer.add_argument("--update", action="store_true",
                           help="fill blanks on records that already match an OEM number")
+    importer.add_argument("--verified", action="store_true",
+                          help="mark imported rows verified (your own confirmed records)")
     importer.set_defaults(func=cmd_import, dry_run=True)
 
     exporter = sub.add_parser("export-csv", help="dump inventory to CSV")
@@ -404,6 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     load.add_argument("--replace", action="store_true", help="delete existing stock first")
     load.add_argument("--include-scans", action="store_true", help="also delete scan history")
     load.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    load.add_argument("--verified", action="store_true",
+                      help="mark the imported rows verified (blocks the EPC check gate)")
     load.set_defaults(func=cmd_load_stock)
 
     db_check = sub.add_parser("check-db", help="diagnose the database connection")

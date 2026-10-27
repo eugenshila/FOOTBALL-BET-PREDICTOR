@@ -99,14 +99,23 @@ def render_report(
         out.append(f"- **Price:** {money(part.unit_price, part.currency)}")
         if not part.verified:
             out.append("- **Verification:** ⚠️ record not verified by staff")
+    # The promotional section is part of the output contract, so it is always
+    # present - even when the part is not in stock yet, where it explains what
+    # has to happen before a card can be published.
+    out.append("\n---")
+    out.append("### WHATSAPP PROMOTIONAL POST GENERATOR")
     if caption:
-        out.append("\n---")
-        out.append("### WHATSAPP PROMOTIONAL POST GENERATOR")
         out.append("```")
         out.append(caption)
         out.append("```")
         out.append(
             f"_Contact line used: {settings.whatsapp_number} · "
             f"cards rendered in 9:16, 1:1 and 4:3._"
+        )
+    else:
+        out.append(
+            "_No card generated yet: this part is not linked to a stock record. "
+            "Add it to inventory (with price and quantity), then publish from the "
+            "Promo studio._"
         )
     return "\n".join(out)
