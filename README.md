@@ -74,6 +74,16 @@ can prove a key works before the shop opens. Neither writes to the database.
 
 ### Tests
 
+There is also a **browser-level smoke test** that loads the real page and drives
+every UI flow in jsdom (identify → report → citations → inventory search → card
+generation → CSV import → new-part drawer):
+
+```bash
+npm install jsdom && node scripts/ui_smoke.cjs   # server on :8000
+```
+
+API tests:
+
 ```bash
 ./.venv/bin/python -m pytest tests -q                       # SQLite
 TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test \
@@ -286,6 +296,7 @@ What it handles from real-world files:
 | `GET` | `/api/inventory.csv` | Export inventory as CSV |
 | `GET` | `/api/scans` | Scan history |
 | `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info (health includes database dialect/version) |
+| `HEAD` | `/` · `/api/health` | Liveness probes (no 405s for uptime monitors) |
 
 Interactive docs: `/docs`.
 
@@ -303,6 +314,7 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 | `WHATSAPP_NUMBER` | `+254 700 000 000` | Order CTA on cards and captions |
 | `CURRENCY` | `KES` | Price formatting |
 | `REQUIRE_PART_VERIFICATION` | `true` | Block cards for unverified records |
+| `SEED_DEMO_DATA` | `true` | Seed the demo catalogue into an empty database |
 | `MAX_UPLOAD_MB` | `12` | Upload limit (images are downscaled to 1600 px) |
 
 ---

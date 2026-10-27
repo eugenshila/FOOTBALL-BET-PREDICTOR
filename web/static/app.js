@@ -486,24 +486,19 @@ async function savePart(event) {
   const form = event.target;
   const get = (name) => form.elements[name]?.value ?? "";
   const id = get("id");
-  const [makeModel, engineYears] = [get("fit_make_model").trim(), get("fit_engine_years").trim()];
-  const [engine, years] = engineYears.split("/").map((s) => s.trim());
-
-  const fitment = makeModel || engineYears
-    ? [{
-        make: makeModel.split(" ")[0] || "",
-        model: makeModel.split(" ").slice(1).join(" ") || "",
-        engine: engine || "",
-        years: years || "",
-      }]
-    : [];
+  const makeModel = get("fit_make_model").trim();
+  const engineYears = get("fit_engine_years").trim();
+  // Sent as free text: the server parses it with the same fitment parser the
+  // CSV importer uses (two-word makes, open-ended years, fuel words).
+  const fitmentText = [makeModel, engineYears].filter(Boolean).join(" ");
 
   const payload = {
     part_name: get("part_name").trim(),
     oem_part_number: get("oem_part_number").trim(),
     alternate_numbers: splitList(get("alternate_numbers")),
     superseded_numbers: splitList(get("superseded_numbers")),
-    fitment,
+    fitment: [],
+    fitment_text: fitmentText,
     condition: get("condition") || "New",
     bin_location: get("bin_location").trim(),
     quantity: Number(get("quantity") || 0),

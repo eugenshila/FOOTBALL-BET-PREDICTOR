@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
@@ -49,9 +50,12 @@ async def lifespan(_app: FastAPI):
         _explain_database_problem(str(exc))
         raise
     log.info("Database ready (%s)", dialect)
-    added = seed_if_empty()
-    if added:
-        log.info("Seeded %s demo catalogue parts", added)
+    if settings.seed_demo_data:
+        added = seed_if_empty()
+        if added:
+            log.info("Seeded %s demo catalogue parts (SEED_DEMO_DATA=true)", added)
+    else:
+        log.info("Demo seeding disabled (SEED_DEMO_DATA=false)")
     yield
 
 
@@ -83,6 +87,17 @@ if (WEB_DIR / "static").exists():
 app.mount("/assets", StaticFiles(directory=ASSET_DIR), name="assets")
 app.mount("/media/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/media/exports", StaticFiles(directory=EXPORT_DIR), name="exports")
+
+
+@app.head("/", include_in_schema=False)
+def index_head() -> Response:
+    """Health/uptime probes often use HEAD; answer it instead of 405."""
+    return Response(status_code=200, media_type="text/html")
+
+
+@app.head("/api/health", include_in_schema=False)
+def health_head() -> Response:
+    return Response(status_code=200, media_type="application/json")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -147,10 +162,20 @@ def list_parts(
     return db.list_parts(q, in_stock_only=in_stock, limit=limit)
 
 
+def _resolve_fitment(fitment: list, fitment_text: str) -> list:
+    """Prefer the structured list; otherwise parse the free-text field."""
+    if fitment:
+        return fitment
+    if fitment_text and fitment_text.strip():
+        return importers.parse_fitment(fitment_text)
+    return fitment
+
+
 @app.post("/api/parts", response_model=InventoryPart, status_code=201)
 def create_part(payload: PartCreate) -> InventoryPart:
     if not payload.part_name.strip():
         raise HTTPException(status_code=422, detail="part_name is required")
+    payload.fitment = _resolve_fitment(payload.fitment, payload.fitment_text)
     if payload.oem_part_number:
         existing = db.find_by_number(payload.oem_part_number)
         if existing:
@@ -171,6 +196,11 @@ def get_part(part_id: int) -> InventoryPart:
 
 @app.patch("/api/parts/{part_id}", response_model=InventoryPart)
 def patch_part(part_id: int, payload: PartUpdate) -> InventoryPart:
+    if payload.fitment_text is not None:
+        parsed = _resolve_fitment([], payload.fitment_text)
+        if parsed:
+            payload.fitment = parsed
+        payload.fitment_text = None
     try:
         part = db.update_part(part_id, payload)
     except ValueError as exc:
@@ -233,7 +263,9 @@ def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
 
     name = f"{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:10]}.jpg"
     path = UPLOAD_DIR / name
-    path.write_bytes(normalised)
+    tmp = path.with_name(f".{name}.{uuid.uuid4().hex[:6]}.tmp")
+    tmp.write_bytes(normalised)
+    os.replace(tmp, path)
     return path, normalised
 
 

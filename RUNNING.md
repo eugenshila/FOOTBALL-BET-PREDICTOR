@@ -185,7 +185,47 @@ python -m app.cli import-csv stock.csv --apply    # write it
 
 ---
 
-## 8. Where things live
+## 8. Replacing the demo data with your real stock
+
+The app seeds 4 demonstration parts on first start. When you are ready to go
+live, replace them in one command:
+
+```powershell
+python -m app.cli load-stock stock.csv --replace
+```
+
+What it does:
+
+1. **parses the whole file first** — if the file cannot be read, if no row has a
+   part name, or if more than 25% of rows fail, it stops and changes *nothing*;
+2. shows how many existing parts will be deleted and asks you to confirm
+   (add `--yes` to skip the prompt in a script);
+3. deletes the old stock, imports the new file, and prints the result.
+
+Then make sure the demo catalogue cannot come back:
+
+```ini
+# .env
+SEED_DEMO_DATA=false
+```
+
+Without that line, an emptied database is re-seeded with demo parts the next time
+the app starts.
+
+Other options:
+
+| Command | Effect |
+|---|---|
+| `load-stock stock.csv` | merge into existing stock (no deletion) |
+| `load-stock stock.csv --replace --include-scans` | also clear scan history |
+| `reset-db --yes` | delete all inventory, keep nothing |
+| `reset-db --yes --reseed` | delete everything, put the demo parts back |
+| `export-csv --out backup.csv` | back up first — do this before `--replace` |
+
+**Always back up before a replace:** `pg_dump -U partsid_user partsid > backup.sql`
+(or `python -m app.cli export-csv --out backup.csv` for a spreadsheet copy).
+
+## 9. Where things live
 
 | Item | Location |
 |---|---|
@@ -226,6 +266,21 @@ app; PostgreSQL is the better choice for a real shop (concurrent tills,
 backups, remote access).
 
 ---
+
+## Testing what is actually on screen
+
+The API tests do not prove the page works. There is a browser-level smoke test
+that loads the real page and `app.js` in jsdom, then drives every flow — upload
+and identify, the report, citations, inventory search, card generation and
+download, CSV dry-run + apply, the new-part drawer, and the unverified-part gate:
+
+```powershell
+npm install jsdom                 # once (needs Node.js)
+node scripts/ui_smoke.cjs         # server must be running on :8000
+```
+
+It prints `PASS`/`FAIL` per check, exits non-zero on failure, and cleans up the
+test parts it creates. Set `BASE=http://localhost:8001` to point it elsewhere.
 
 ## Running the tests
 

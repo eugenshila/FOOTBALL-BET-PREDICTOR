@@ -291,3 +291,21 @@ def test_scan_history_is_recorded(client, sample_parts):
     after = client.get("/api/scans").json()
     assert len(after) == before + 1
     assert after[0]["image_url"].startswith("/media/uploads/")
+
+
+def test_head_requests_succeed_for_monitors(client):
+    """Uptime monitors and proxies probe with HEAD; 405 looks like an outage."""
+    assert client.head("/").status_code == 200
+    assert client.head("/api/health").status_code == 200
+
+
+def test_card_writes_are_atomic(client):
+    """No temp files may be left behind after rendering."""
+    from app.config import EXPORT_DIR
+
+    part_id = client.get("/api/parts").json()[0]["id"]
+    client.post("/api/cards", json={"part_id": part_id, "formats": ["square"]})
+    leftovers = [p.name for p in EXPORT_DIR.glob(".tmp*")] + [
+        p.name for p in EXPORT_DIR.glob(".*.tmp")
+    ]
+    assert leftovers == []

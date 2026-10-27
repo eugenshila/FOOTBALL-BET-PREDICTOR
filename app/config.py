@@ -95,6 +95,9 @@ class Settings:
     currency: str = field(default_factory=lambda: os.getenv("CURRENCY", "KES"))
     location: str = field(default_factory=lambda: os.getenv("SHOP_LOCATION", "Nairobi, Kenya"))
     max_upload_mb: int = field(default_factory=lambda: int(os.getenv("MAX_UPLOAD_MB", "12")))
+    # Demo catalogue only fills an empty database once. Set false in production
+    # so a cleared database stays cleared instead of being re-seeded on boot.
+    seed_demo_data: bool = field(default_factory=lambda: _env_bool("SEED_DEMO_DATA", True))
     require_verification: bool = field(default_factory=lambda: _env_bool("REQUIRE_PART_VERIFICATION", True))
 
     def ensure_dirs(self) -> None:

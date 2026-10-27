@@ -154,6 +154,10 @@ class PartCreate(BaseModel):
     technical_notes: list[str] = Field(default_factory=list)
     image_path: str = ""
     verified: bool = False
+    # Free text like "Jeep Grand Cherokee 3.6L V6 2011-2021". Parsed server-side
+    # with the same parser the CSV importer uses, so "Land Rover" and
+    # "Mercedes-Benz" are not split into a one-word make.
+    fitment_text: str = ""
 
 
 class PartUpdate(BaseModel):
@@ -171,6 +175,7 @@ class PartUpdate(BaseModel):
     technical_notes: list[str] | None = None
     image_path: str | None = None
     verified: bool | None = None
+    fitment_text: str | None = None
 
 
 class StockMovement(BaseModel):

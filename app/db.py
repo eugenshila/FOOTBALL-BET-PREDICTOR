@@ -308,6 +308,23 @@ def list_scans(limit: int = 20, *, path: Path | str | None = None) -> list[ScanR
     return out
 
 
+def clear_inventory(
+    *, include_scans: bool = False, path: Path | str | None = None
+) -> dict[str, int]:
+    """Delete every part (movements cascade). Optionally clear scan history."""
+    before = stats(path=path)
+    with connect(path) as conn:
+        conn.execute("DELETE FROM movements")
+        conn.execute("DELETE FROM parts")
+        if include_scans:
+            conn.execute("DELETE FROM scans")
+    return {
+        "parts_removed": int(before["parts"]),
+        "units_removed": int(before["units"]),
+        "scans_removed": int(before["scans"]) if include_scans else 0,
+    }
+
+
 def stats(*, path: Path | str | None = None) -> dict[str, object]:
     with connect(path) as conn:
         totals = conn.execute(

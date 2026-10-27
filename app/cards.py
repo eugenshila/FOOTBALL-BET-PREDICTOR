@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import random
 from dataclasses import dataclass
 from functools import lru_cache
@@ -808,8 +809,15 @@ def render_all(ctx: CardContext, formats: list[str] | None = None) -> list[tuple
 
 
 def save_png(img: Image.Image, path: Path) -> Path:
+    """Write atomically so a browser can never fetch a partial card."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(path, "PNG", optimize=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        img.save(tmp, "PNG", optimize=True)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     return path
 
 

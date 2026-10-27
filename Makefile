@@ -1,4 +1,4 @@
-.PHONY: install install-pg run run-pg test test-pg check-db check-providers cards cli import export clean
+.PHONY: install install-pg run test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export clean
 
 install:
 	python3 -m venv .venv
@@ -24,6 +24,17 @@ check-db:
 
 check-providers:
 	./.venv/bin/python -m app.cli check-providers
+
+# Browser-level regression pass; needs Node + `npm install jsdom`
+ui-test:
+	node scripts/ui_smoke.cjs
+
+# Replace the whole inventory from a spreadsheet (validates before deleting)
+load-stock:
+	./.venv/bin/python -m app.cli load-stock $(CSV) --replace
+
+reset-db:
+	./.venv/bin/python -m app.cli reset-db
 
 # Render the sample promo cards into docs/samples
 cards:

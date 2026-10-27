@@ -19,10 +19,12 @@ from .report import render_report
 
 
 def _bootstrap() -> None:
+    """Prepare the database. Respects SEED_DEMO_DATA so a production database
+    is never polluted with demo parts by a CLI command."""
     settings.ensure_dirs()
     db.init_db()
-    if seed_if_empty():
-        print("· seeded demo catalogue\n")
+    if settings.seed_demo_data and seed_if_empty():
+        print("· seeded demo catalogue (SEED_DEMO_DATA=true)\n")
 
 
 def cmd_identify(args: argparse.Namespace) -> int:
@@ -253,6 +255,105 @@ def _default_sample() -> Path | None:
     return None
 
 
+def _confirm(question: str, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    answer = input(f"{question} [type 'yes' to continue]: ").strip().lower()
+    return answer == "yes"
+
+
+def cmd_reset_db(args: argparse.Namespace) -> int:
+    """Wipe inventory (and optionally scans). Used before loading real stock."""
+    _bootstrap()
+    before = db.stats()
+    print(f"database : {db.database_info()['dsn']}")
+    print(f"contents : {before['parts']} parts · {before['units']} units · {before['scans']} scans")
+    if not before["parts"] and not (args.include_scans and before["scans"]):
+        print("\nnothing to remove.")
+        return 0
+
+    if not _confirm(
+        f"\nThis deletes {before['parts']} part(s)"
+        + (f" and {before['scans']} scan(s)" if args.include_scans else "")
+        + " permanently. Continue?",
+        args.yes,
+    ):
+        print("cancelled — nothing was changed.")
+        return 1
+
+    removed = db.clear_inventory(include_scans=args.include_scans)
+    print(
+        f"\nremoved  : {removed['parts_removed']} part(s), {removed['units_removed']} unit(s)"
+        + (f", {removed['scans_removed']} scan(s)" if args.include_scans else "")
+    )
+    if args.reseed:
+        added = seed_if_empty(force=True)
+        print(f"re-seeded: {added} demo part(s)")
+    else:
+        print(
+            "\nThe database is empty. Set SEED_DEMO_DATA=false in .env so the demo\n"
+            "catalogue is not re-created on the next start, then load your stock:\n"
+            "    python -m app.cli load-stock stock.csv --replace --yes"
+        )
+    return 0
+
+
+def cmd_load_stock(args: argparse.Namespace) -> int:
+    """Replace (or merge) the inventory from a CSV in one verified operation."""
+    _bootstrap()
+    source = Path(args.csv)
+    if not source.exists():
+        print(f"error: {source} not found", file=sys.stderr)
+        return 2
+    raw = source.read_bytes()
+
+    # Always validate first: never delete data for a file that cannot be parsed.
+    preview = importers.import_csv(
+        raw, dry_run=True, update_existing=False, default_currency=settings.currency
+    )
+    summary = preview.summary()
+    print(f"file     : {source}  ({summary['rows_total']} rows read)")
+    if summary["errors"] and summary["created"] == 0:
+        print("error: no usable rows found — nothing was changed", file=sys.stderr)
+        for problem in summary["problems"][:10]:
+            print(f"  ! row {problem['row']}: {problem['message']}", file=sys.stderr)
+        return 1
+    if summary["rows_total"] and summary["errors"] / summary["rows_total"] > 0.25:
+        print("error: more than 25% of rows failed to parse — nothing was changed", file=sys.stderr)
+        for problem in summary["problems"][:10]:
+            print(f"  ! row {problem['row']}: {problem['message']}", file=sys.stderr)
+        print("Fix the file (or use import-csv to load the good rows only).", file=sys.stderr)
+        return 1
+
+    before = db.stats()
+    if args.replace:
+        print(f"replace  : will delete {before['parts']} existing part(s) after the import parses")
+        if not _confirm("Continue?", args.yes):
+            print("cancelled — nothing was changed.")
+            return 1
+        removed = db.clear_inventory(include_scans=args.include_scans)
+        print(f"removed  : {removed['parts_removed']} part(s)")
+
+    written = importers.import_csv(
+        raw,
+        dry_run=False,
+        update_existing=not args.replace,
+        default_currency=settings.currency,
+    )
+    final = db.stats()
+    print(
+        f"imported : {written.created} new, {written.updated} updated, "
+        f"{written.skipped} already present, {written.errors} problem row(s)"
+    )
+    for problem in written.summary()["problems"][:10]:
+        print(f"  ! row {problem['row']}: {problem['message']}")
+    print(f"database : {final['parts']} parts · {final['units']} units · "
+          f"{final['inventory_value']:.0f} {settings.currency} value")
+    if written.errors:
+        print("\nSome rows need attention — see above. The rest were imported.")
+    return 0 if written.errors == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="parts", description="Spare-parts ID engine CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -289,6 +390,21 @@ def build_parser() -> argparse.ArgumentParser:
     exporter = sub.add_parser("export-csv", help="dump inventory to CSV")
     exporter.add_argument("--out", default="inventory.csv")
     exporter.set_defaults(func=cmd_export)
+
+    reset = sub.add_parser("reset-db", help="delete all inventory (and optionally scans)")
+    reset.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    reset.add_argument("--include-scans", action="store_true", help="also delete scan history")
+    reset.add_argument("--reseed", action="store_true", help="put the demo catalogue back")
+    reset.set_defaults(func=cmd_reset_db)
+
+    load = sub.add_parser(
+        "load-stock", help="replace or merge the inventory from a CSV, with validation"
+    )
+    load.add_argument("csv")
+    load.add_argument("--replace", action="store_true", help="delete existing stock first")
+    load.add_argument("--include-scans", action="store_true", help="also delete scan history")
+    load.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    load.set_defaults(func=cmd_load_stock)
 
     db_check = sub.add_parser("check-db", help="diagnose the database connection")
     db_check.set_defaults(func=cmd_check_db)
