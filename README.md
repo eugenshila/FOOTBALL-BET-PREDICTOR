@@ -33,10 +33,25 @@ python3 -m venv .venv
 ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open <http://localhost:8000>. On first start the app creates its SQLite database and
-seeds a **4-part demonstration catalogue** so every screen is usable immediately.
+Open <http://localhost:8000>. On first start the app creates its schema and seeds a
+**4-part demonstration catalogue** so every screen is usable immediately.
 
 No API key is required to boot — see [Vision providers](#vision-providers).
+
+**Windows + PostgreSQL users: follow [RUNNING.md](RUNNING.md)** — it covers creating
+the database, the `DATABASE_URL` line, and the usual connection errors. The short
+version:
+
+```powershell
+pip install -r requirements-postgres.txt            # psycopg
+# .env:  DATABASE_URL=postgresql://partsid_user:pw@localhost:5432/partsid
+python -m app.cli check-db                          # verify before starting
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+> **Ports:** the app listens on **8000**; PostgreSQL stays on its default **5432**.
+> The app connects to Postgres through `DATABASE_URL`, so nothing needs to move
+> ports and 5432 is not a web page.
 
 ### CLI
 
@@ -45,13 +60,28 @@ No API key is required to boot — see [Vision providers](#vision-providers).
 ./.venv/bin/python -m app.cli lookup 5184894AA           # counter lookup by OEM/x-ref
 ./.venv/bin/python -m app.cli identify photo.jpg --cards # identify + render cards
 ./.venv/bin/python -m app.cli cards --part-id 2 --formats story,square
+./.venv/bin/python -m app.cli import-csv stock.csv       # dry run, then --apply
+./.venv/bin/python -m app.cli export-csv --out stock.csv # round-trip export
+./.venv/bin/python -m app.cli check-db                   # diagnose the database
+./.venv/bin/python -m app.cli check-providers            # one live call per provider
 ```
+
+`check-db` reports the engine, the masked DSN, the server version and row counts, and
+explains the usual failures (service down, missing database, missing driver).
+`check-providers` makes exactly one live call per configured provider — with latency,
+the part it identified, and for grounded providers the number of web sources — so you
+can prove a key works before the shop opens. Neither writes to the database.
 
 ### Tests
 
 ```bash
-./.venv/bin/python -m pytest tests -q      # 26 tests, ~18s
+./.venv/bin/python -m pytest tests -q                       # SQLite
+TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test \
+  ./.venv/bin/python -m pytest tests -q                     # the same suite on Postgres
 ```
+
+The full suite passes on both engines (95 tests on PostgreSQL, where a few
+engine-specific tests also run).
 
 ---
 
@@ -194,9 +224,14 @@ assets/fonts/            Barlow / Barlow Condensed (SIL OFL)
 tests/                   API + pipeline tests
 ```
 
-**Storage.** SQLite (WAL) with connection-per-operation — no ORM, no server. Parts,
-every stock movement, and every scan are persisted; the DB, uploads and generated
-cards are git-ignored so shop data never lands in the repository.
+**Storage.** Works on **SQLite** (default, zero setup, WAL) or **PostgreSQL** — set
+`DATABASE_URL` and the same code runs on either. `app/storage.py` is the only place
+that knows the difference: it translates `?` → `%s`, maps `AUTOINCREMENT` to identity
+columns, turns `lastrowid` into `INSERT … RETURNING id`, picks `ILIKE` over `LIKE`,
+and keeps a small connection pool for Postgres. The repository layer (`app/db.py`)
+writes portable SQL and never branches on engine. Parts, every stock movement and
+every scan are persisted; the database files, uploads and generated cards are
+git-ignored so shop data never lands in the repository.
 
 **Bulk data.** `importers.py` handles CSV in and out with fuzzy header mapping,
 locale-tolerant number parsing and OEM-based dedupe.
@@ -250,7 +285,7 @@ What it handles from real-world files:
 | `POST` | `/api/inventory/import?dry_run=&update_existing=` | Import a CSV stock list |
 | `GET` | `/api/inventory.csv` | Export inventory as CSV |
 | `GET` | `/api/scans` | Scan history |
-| `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info |
+| `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info (health includes database dialect/version) |
 
 Interactive docs: `/docs`.
 
@@ -262,6 +297,7 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `DATABASE_URL` | *(empty = SQLite)* | `postgresql://user:pw@localhost:5432/partsid` to use PostgreSQL |
 | `VISION_PROVIDER` | `auto` | `auto`/`openai`/`gemini`/`anthropic`/`ollama`/`offline` |
 | `SHOP_NAME` | `SHILA AUTO PARTS` | Wordmark on every card |
 | `WHATSAPP_NUMBER` | `+254 700 000 000` | Order CTA on cards and captions |

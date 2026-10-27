@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, importers, links, vision
+from . import cards, db, importers, links, storage, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -42,7 +43,12 @@ MAX_BYTES = settings.max_upload_mb * 1024 * 1024
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.ensure_dirs()
-    db.init_db()
+    try:
+        dialect = db.init_db()
+    except storage.StorageError as exc:
+        _explain_database_problem(str(exc))
+        raise
+    log.info("Database ready (%s)", dialect)
     added = seed_if_empty()
     if added:
         log.info("Seeded %s demo catalogue parts", added)
@@ -101,6 +107,7 @@ def health() -> dict:
         "whatsapp": settings.whatsapp_number,
         "currency": settings.currency,
         "require_verification": settings.require_verification,
+        "database": db.database_info(),
         "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -522,6 +529,27 @@ def public_config() -> dict:
 @app.exception_handler(ValueError)
 def value_error_handler(_request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+def _explain_database_problem(message: str) -> None:
+    """Print a readable hint block instead of a bare traceback."""
+    hint = (
+        "\n"
+        "┌─ Database not usable ──────────────────────────────────────────────\n"
+        f"│ {message.splitlines()[0]}\n"
+        "│\n"
+        "│ Fix it with one of these:\n"
+        "│   · start PostgreSQL (Windows: Start-Service postgresql-x64-17)\n"
+        "│   · check DATABASE_URL in .env - see RUNNING.md step 3\n"
+        '│   · missing driver:  pip install -r requirements-postgres.txt\n'
+        "│   · no database server? unset DATABASE_URL to use SQLite instead\n"
+        "│\n"
+        "│ Diagnose:  python -m app.cli check-db\n"
+        "└────────────────────────────────────────────────────────────────────\n"
+    )
+    if any(line.strip() for line in message.splitlines()[1:]):
+        hint += "\n".join("  " + line for line in message.splitlines()[1:]) + "\n"
+    print(hint, file=sys.stderr)
 
 
 def main() -> None:  # pragma: no cover - console entry point

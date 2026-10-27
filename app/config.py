@@ -10,7 +10,32 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+def _load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE pairs from .env without overriding real environment vars.
+
+    Keeps deployment to "edit one file" instead of exporting variables in every
+    new terminal. Anything malformed is skipped rather than crashing startup.
+    """
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+_load_dotenv(BASE_DIR / ".env")
 DATA_DIR = Path(os.getenv("APP_DATA_DIR", BASE_DIR / "data"))
 ASSET_DIR = BASE_DIR / "assets"
 SEED_DIR = ASSET_DIR / "seed"
@@ -19,6 +44,9 @@ UPLOAD_DIR = Path(os.getenv("APP_UPLOAD_DIR", BASE_DIR / "uploads"))
 EXPORT_DIR = Path(os.getenv("APP_EXPORT_DIR", BASE_DIR / "exports"))
 WEB_DIR = BASE_DIR / "web"
 DB_PATH = Path(os.getenv("APP_DB_PATH", DATA_DIR / "inventory.db"))
+# Empty -> SQLite at DB_PATH. Set to postgresql://user:pass@host:5432/dbname
+# to run the same app against PostgreSQL.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -40,6 +68,7 @@ class Settings:
     with no internet and no API key.
     """
 
+    database_url: str = field(default_factory=lambda: DATABASE_URL)
     vision_provider: str = field(default_factory=lambda: os.getenv("VISION_PROVIDER", "auto").lower())
     vision_model: str = field(default_factory=lambda: os.getenv("VISION_MODEL", ""))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))

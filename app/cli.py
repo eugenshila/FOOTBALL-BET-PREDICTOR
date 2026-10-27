@@ -12,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import cards, db, importers, vision
+from . import cards, db, importers, storage, vision
 from .catalog import match_part, seed_if_empty
 from .config import EXPORT_DIR, settings
 from .report import render_report
@@ -150,6 +150,109 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_db(args: argparse.Namespace) -> int:
+    """Diagnose the database connection and show what is stored."""
+    info = db.database_info()
+    print(f"engine   : {info['dialect']}")
+    print(f"dsn      : {info['dsn']}  ({info['source']})")
+    if not info.get("connected"):
+        error = info.get("error", "cannot connect")
+        print(f"status   : FAILED — {error}")
+        print("\nHints:")
+        lowered = error.lower()
+        if "scheme" in lowered:
+            print("  · DATABASE_URL must start with postgresql:// (or leave it empty for SQLite)")
+            print("    example: postgresql://partsid_user:pw@localhost:5432/partsid")
+        elif "psycopg" in lowered:
+            print("  · install the driver:  pip install -r requirements-postgres.txt")
+        else:
+            print("  · is PostgreSQL running?  (Windows: Services -> postgresql-x64; "
+                  "macOS: brew services list; Linux: systemctl status postgresql)")
+            print("  · did you create the database and user?  see RUNNING.md step 2")
+            print("  · is the port right?  PostgreSQL defaults to 5432, not 8000")
+        print("  · unset DATABASE_URL to fall back to SQLite")
+        return 1
+
+    print(f"server   : {info.get('version', 'unknown')}")
+    try:
+        db.init_db()
+        counts = db.stats()
+        print("status   : OK")
+        print(
+            f"contents : {counts['parts']} parts · {counts['units']} units · "
+            f"{counts['scans']} scans"
+        )
+    except Exception as exc:  # noqa: BLE001 - report, do not crash
+        print(f"status   : connected but unusable — {exc}")
+        return 1
+    return 0
+
+
+def cmd_check_providers(args: argparse.Namespace) -> int:
+    """One live call per configured provider. Never touches the database."""
+    sample = Path(args.image) if args.image else _default_sample()
+    if sample is None or not sample.exists():
+        print("error: no sample image found (assets/seed/*.jpg)", file=sys.stderr)
+        return 2
+
+    raw = sample.read_bytes()
+    print(f"sample image : {sample}")
+    print(f"configured   : VISION_PROVIDER={settings.vision_provider} "
+          f"(resolved: {vision.resolve_provider_name()})")
+    print(f"grounding    : {'on' if settings.grounding_enabled else 'off'} "
+          f"({settings.grounding_model})\n")
+
+    names = vision.available_providers()
+    results = [vision.probe(name, raw) for name in names]
+
+    width = max(len(r["label"]) for r in results) + 2
+    for result in results:
+        mark = "OK  " if result["ok"] else "FAIL"
+        header = f"[{mark}] {result['label']:<{width}} {result['ms']:>5} ms"
+        if result["ok"]:
+            extra = f" → {result['part_name']}"
+            if result["oem_part_number"]:
+                extra += f" · OEM {result['oem_part_number']} ({result['number_confidence']})"
+            if result["grounded"]:
+                extra += f" · web {result['sources']} source(s)"
+            print(header + extra)
+            if result.get("warning"):
+                print(f"        note: {result['warning'][:150]}")
+        else:
+            print(header)
+            print(f"        error: {result['error']}")
+
+    ok_count = sum(1 for r in results if r["ok"])
+    print(f"\n{ok_count}/{len(results)} provider(s) responded.")
+
+    if "gemini-grounded" not in names:
+        print(
+            "\nTo enable searching identification (free): get a key at "
+            "https://aistudio.google.com/apikey\n  then set GEMINI_API_KEY=... and "
+            "SEARCH_GROUNDING=true in .env"
+        )
+    if len(names) == 1:
+        print(
+            "Only the offline matcher is active, so uploads are compared against your "
+            "own catalogue photos.\nNothing is wrong — add a key (or run Ollama) for "
+            "identification of parts you have not photographed."
+        )
+    return 0 if ok_count else 1
+
+
+def _default_sample() -> Path | None:
+    from .config import SEED_DIR
+
+    for name in ("wheel-hub.jpg", "pcv-valve.jpg"):
+        candidate = SEED_DIR / name
+        if candidate.exists():
+            return candidate
+    if SEED_DIR.exists():
+        images = sorted(SEED_DIR.glob("*.jpg"))
+        return images[0] if images else None
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="parts", description="Spare-parts ID engine CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +289,15 @@ def build_parser() -> argparse.ArgumentParser:
     exporter = sub.add_parser("export-csv", help="dump inventory to CSV")
     exporter.add_argument("--out", default="inventory.csv")
     exporter.set_defaults(func=cmd_export)
+
+    db_check = sub.add_parser("check-db", help="diagnose the database connection")
+    db_check.set_defaults(func=cmd_check_db)
+
+    providers = sub.add_parser(
+        "check-providers", help="make one live call per configured vision provider"
+    )
+    providers.add_argument("--image", default="", help="sample photo to identify")
+    providers.set_defaults(func=cmd_check_providers)
     return parser
 
 

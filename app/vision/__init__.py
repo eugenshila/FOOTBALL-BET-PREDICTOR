@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import httpx
 
@@ -176,6 +177,44 @@ def identify(image_bytes: bytes, mime: str = "image/jpeg") -> IdentificationRepo
     )
 
 
+def probe(name: str, image_bytes: bytes, mime: str = "image/jpeg") -> dict[str, Any]:
+    """Make ONE live call to ``name`` and report exactly what happened.
+
+    Used by ``python -m app.cli check-providers`` so an operator can verify a
+    key, a region restriction or a local model in one command instead of
+    discovering the problem at the counter. Never writes to the database.
+    """
+    started = time.perf_counter()
+    result: dict[str, Any] = {"provider": name, "label": provider_label(name)}
+    try:
+        report = _build(name).identify(image_bytes, mime)
+    except Exception as exc:  # noqa: BLE001 - the point is to capture the reason
+        result.update(
+            {
+                "ok": False,
+                "ms": round((time.perf_counter() - started) * 1000),
+                "error": f"{type(exc).__name__}: {str(exc).splitlines()[0][:220]}",
+            }
+        )
+        return result
+
+    result.update(
+        {
+            "ok": True,
+            "ms": round((time.perf_counter() - started) * 1000),
+            "part_name": report.part_name or "(no name returned)",
+            "oem_part_number": report.oem_part_number or "",
+            "confidence": report.overall_confidence.value,
+            "number_confidence": report.number_confidence.value,
+            "grounded": report.grounded,
+            "sources": len(report.sources),
+            "queries": len(report.search_queries),
+            "warning": report.warnings[0] if report.warnings else "",
+        }
+    )
+    return result
+
+
 def provider_label(name: str | None = None) -> str:
     """Human label for the badge in the UI."""
     return _PROVIDER_LABELS.get(name or resolve_provider_name(), "Unknown provider")
@@ -200,6 +239,7 @@ __all__ = [
     "resolve_provider_name",
     "available_providers",
     "provider_label",
+    "probe",
     "describe",
     "OfflineIdentifier",
     "GroundingUnavailable",
