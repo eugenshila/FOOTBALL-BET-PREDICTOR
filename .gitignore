@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime data (recreated on start; never commit shop data)
+data/inventory.db
+data/inventory.db-*
+data/feature_cache.json
+uploads/
+exports/
+
+# Environment / secrets
+.env
+.env.local
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Parts ID Engine — Identify · Stock · Post</title>
+<meta name="theme-color" content="#181a1e" />
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="preload" href="/assets/fonts/BarlowCondensed-Bold.ttf" as="font" type="font/ttf" crossorigin />
+<link rel="preload" href="/assets/fonts/Barlow-Medium.ttf" as="font" type="font/ttf" crossorigin />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <div>
+      <h1 id="shop-name">SHILA AUTO PARTS</h1>
+      <p id="shop-tagline">OEM &amp; GENUINE SPARE PARTS</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="provider-badge" class="badge" title="Vision provider in use">…</span>
+    <span id="stat-pill" class="pill">…</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-view="identify" role="tab">Identify</button>
+  <button class="tab" data-view="inventory" role="tab">Inventory</button>
+  <button class="tab" data-view="studio" role="tab">Promo studio</button>
+</nav>
+
+<main>
+  <!-- ── IDENTIFY ─────────────────────────────────────────────── -->
+  <section id="view-identify" class="view active">
+    <div class="grid-2">
+      <div class="panel">
+        <h2 class="panel-title">1 · Capture the part</h2>
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <img id="preview" alt="" hidden />
+          <div id="dropzone-idle">
+            <div class="cam-icon" aria-hidden="true"></div>
+            <p class="dz-title">Drop a photo, or tap to use the camera</p>
+            <p class="muted small">JPG/PNG/WebP · up to <span id="max-mb">12</span> MB · shoot in good light against a plain surface</p>
+          </div>
+          <input id="file-input" type="file" accept="image/*" />
+        </div>
+        <div class="row gap wrap">
+          <button id="btn-camera" class="btn ghost">📷 Camera</button>
+          <button id="btn-identify" class="btn primary" disabled>Identify part</button>
+        </div>
+        <div id="demo-block" class="demo-block">
+          <p class="muted small">No photo handy? Try a sample:</p>
+          <div id="demo-chips" class="chips"></div>
+        </div>
+        <p id="identify-status" class="status" role="status"></p>
+      </div>
+
+      <div class="panel">
+        <h2 class="panel-title">2 · Identification report</h2>
+        <div id="report-empty" class="empty">
+          <p>Nothing scanned yet.</p>
+          <p class="muted small">The report shows part name, OEM and cross-reference numbers, vehicle fitment and the service notes a fitter needs before touching the car.</p>
+        </div>
+        <div id="report" class="report" hidden></div>
+      </div>
+    </div>
+
+    <div id="match-block" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">3 · Warehouse &amp; promo</h2>
+        <span id="match-badge" class="badge"></span>
+      </div>
+      <div id="match-body"></div>
+    </div>
+  </section>
+
+  <!-- ── INVENTORY ────────────────────────────────────────────── -->
+  <section id="view-inventory" class="view">
+    <div class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Stock</h2>
+        <div class="row gap">
+          <input id="search" class="input" type="search" placeholder="Search name, OEM, bin, vehicle…" />
+          <button id="btn-new-part" class="btn">＋ New part</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Part</th><th>OEM</th><th>Bin</th><th class="num">Qty</th>
+              <th class="num">Price</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="parts-body"></tbody>
+        </table>
+      </div>
+      <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
+    </div>
+  </section>
+
+  <!-- ── STUDIO ───────────────────────────────────────────────── -->
+  <section id="view-studio" class="view">
+    <div class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">WhatsApp promo generator</h2>
+        <select id="studio-part" class="input select"></select>
+      </div>
+      <div class="row gap wrap studio-controls">
+        <label class="field grow">
+          <span>Headline override (optional)</span>
+          <input id="studio-headline" class="input" placeholder="e.g. 3.6 PENTASTAR TICK? WE HAVE THE FIX" />
+        </label>
+        <div class="formats" id="format-toggles">
+          <label><input type="checkbox" value="story" checked /> 9:16 status</label>
+          <label><input type="checkbox" value="square" checked /> 1:1 post</label>
+          <label><input type="checkbox" value="wide" checked /> 4:3 post</label>
+          <label><input type="checkbox" value="bin_label" /> Bin label</label>
+        </div>
+        <button id="btn-generate" class="btn primary">Generate cards</button>
+      </div>
+      <p id="studio-status" class="status" role="status"></p>
+      <div id="card-output" class="card-output"></div>
+      <div id="caption-block" class="caption-block" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">WhatsApp caption</h2>
+          <button id="btn-copy" class="btn ghost small-btn">Copy</button>
+        </div>
+        <pre id="caption-text" class="caption"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- part editor drawer -->
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-scrim" data-close></div>
+  <form id="part-form" class="drawer-panel">
+    <div class="panel-head">
+      <h2 class="panel-title" id="drawer-title">New part</h2>
+      <button type="button" class="btn ghost small-btn" data-close>Close</button>
+    </div>
+    <input type="hidden" name="id" />
+    <div class="form-grid">
+      <label class="field span2"><span>Part name *</span><input class="input" name="part_name" required /></label>
+      <label class="field"><span>OEM part number</span><input class="input" name="oem_part_number" placeholder="5184894AA" /></label>
+      <label class="field"><span>Alternate / cross-refs (comma separated)</span><input class="input" name="alternate_numbers" /></label>
+      <label class="field"><span>Superseded numbers</span><input class="input" name="superseded_numbers" /></label>
+      <label class="field"><span>Category</span><input class="input" name="category" placeholder="Engine / Valvetrain" /></label>
+      <label class="field"><span>Bin location</span><input class="input" name="bin_location" placeholder="A1-B3" /></label>
+      <label class="field"><span>Condition</span>
+        <select class="input select" name="condition">
+          <option>New</option><option>Used</option><option>Refurbished</option>
+        </select>
+      </label>
+      <label class="field"><span>Quantity</span><input class="input" type="number" min="0" name="quantity" value="0" /></label>
+      <label class="field"><span>Unit price</span><input class="input" type="number" min="0" step="0.01" name="unit_price" value="0" /></label>
+      <label class="field"><span>Fitment — make / model</span><input class="input" name="fit_make_model" placeholder="Jeep Grand Cherokee" /></label>
+      <label class="field"><span>Fitment — engine / years</span><input class="input" name="fit_engine_years" placeholder="3.6L Pentastar V6 / 2011-2021" /></label>
+      <label class="field span2"><span>Service notes (one per line)</span><textarea class="input" name="technical_notes" rows="3"></textarea></label>
+      <label class="field span2"><span>Photo path or URL</span><input class="input" name="image_path" placeholder="assets/seed/pcv-valve.jpg" /></label>
+      <label class="check span2"><input type="checkbox" name="verified" /> Verified — I have confirmed the OEM number against the EPC</label>
+    </div>
+    <div class="row gap end">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save part</button>
+    </div>
+  </form>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

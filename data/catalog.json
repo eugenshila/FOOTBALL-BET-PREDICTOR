@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "name": "Demonstration catalogue",
+    "sample_data": true,
+    "disclaimer": "Part numbers, prices and bin locations in this file are illustrative demo data for a shop's own catalogue. Replace them with your verified supplier/EPC data before selling anything. The identification engine never treats this file as an authoritative parts database."
+  },
+  "parts": [
+    {
+      "part_name": "PCV Valve",
+      "category": "Engine / Crankcase Ventilation",
+      "oem_part_number": "5184894AA",
+      "alternate_numbers": ["68083202AA", "53032993AB"],
+      "superseded_numbers": ["5184894AB"],
+      "fitment": [
+        {
+          "make": "Jeep",
+          "model": "Grand Cherokee",
+          "engine": "3.6L Pentastar V6",
+          "years": "2011-2021"
+        },
+        {
+          "make": "Dodge",
+          "model": "Durango",
+          "engine": "3.6L Pentastar V6",
+          "years": "2011-2020"
+        }
+      ],
+      "condition": "New",
+      "bin_location": "A1-B3",
+      "quantity": 14,
+      "unit_price": 2500,
+      "currency": "KES",
+      "technical_notes": [
+        "Push-fit into the right bank valve cover; lubricate the O-ring with clean engine oil before seating.",
+        "Common symptoms of failure: rough idle, oil in the intake tube, whistling at idle, P0171/P0507 codes.",
+        "Check the PCV hose for cracks while replacing - a split hose mimics a failed valve."
+      ],
+      "verified": true,
+      "image": "assets/seed/pcv-valve.jpg"
+    },
+    {
+      "part_name": "Wheel Hub & Bearing Assembly (Front)",
+      "category": "Drivetrain / Wheel End",
+      "oem_part_number": "52124767AE",
+      "alternate_numbers": ["52124767AD", "HA590358", "BR930906"],
+      "superseded_numbers": ["52124767AC", "52124767AB"],
+      "fitment": [
+        {
+          "make": "Jeep",
+          "model": "Grand Cherokee WK2",
+          "engine": "3.6L / 5.7L",
+          "years": "2011-2022"
+        },
+        {
+          "make": "Dodge",
+          "model": "Durango WD",
+          "engine": "3.6L / 5.7L",
+          "years": "2011-2022"
+        }
+      ],
+      "condition": "New",
+      "bin_location": "C2-A1",
+      "quantity": 6,
+      "unit_price": 12800,
+      "currency": "KES",
+      "technical_notes": [
+        "Integral ABS wheel-speed sensor - do not reuse a damaged connector pigtail.",
+        "Axle nut is torque-to-yield on some applications; fit a new nut and torque to spec (approx. 240 Nm) with the vehicle on the ground.",
+        "Failure symptoms: humming/growling that changes with vehicle speed and swerves when loaded side to side.",
+        "Always replace in axle pairs where budget allows; inspect the knuckle bore for corrosion before pressing in."
+      ],
+      "verified": true,
+      "image": "assets/seed/wheel-hub.jpg"
+    },
+    {
+      "part_name": "High-Pressure Fuel Pump (GDI)",
+      "category": "Fuel System",
+      "oem_part_number": "68206092AA",
+      "alternate_numbers": ["RL206092AA", "HM10021"],
+      "superseded_numbers": ["68101349AA"],
+      "fitment": [
+        {
+          "make": "Jeep",
+          "model": "Grand Cherokee",
+          "engine": "3.6L Pentastar V6",
+          "years": "2014-2021"
+        },
+        {
+          "make": "Ram",
+          "model": "1500",
+          "engine": "3.6L Pentastar V6",
+          "years": "2013-2021"
+        }
+      ],
+      "condition": "New",
+      "bin_location": "B3-C4",
+      "quantity": 3,
+      "unit_price": 46500,
+      "currency": "KES",
+      "technical_notes": [
+        "Roller follower runs on a dedicated camshaft lobe - inspect the lobe for scoring before fitting a new pump.",
+        "High-pressure line is single-use on most GDI applications; never reuse the flare fitting.",
+        "Failure symptoms: extended crank, P0087/P008A low fuel pressure codes, misfire under load, fuel smell in oil.",
+        "Cleanliness is critical: any debris in the delivery line will destroy the new pump."
+      ],
+      "verified": true,
+      "image": "assets/seed/hp-fuel-pump.jpg"
+    },
+    {
+      "part_name": "Camshaft Roller Rocker Arm",
+      "category": "Engine / Valvetrain",
+      "oem_part_number": "5184296AH",
+      "alternate_numbers": ["5184296AG", "5184296AF"],
+      "superseded_numbers": ["5184296AE"],
+      "fitment": [
+        {
+          "make": "Chrysler",
+          "model": "300 / Town & Country",
+          "engine": "3.6L Pentastar V6",
+          "years": "2011-2022"
+        },
+        {
+          "make": "Jeep",
+          "model": "Wrangler JK/JL",
+          "engine": "3.6L Pentastar V6",
+          "years": "2012-2023"
+        }
+      ],
+      "condition": "New",
+      "bin_location": "A2-D2",
+      "quantity": 24,
+      "unit_price": 3200,
+      "currency": "KES",
+      "technical_notes": [
+        "Most common Pentastar valvetrain failure: the roller needle bearing walks out and destroys the cam lobe.",
+        "Replace the matched lash adjuster if the plunger is not free or the arm shows heat discolouration.",
+        "Classic symptom: loud top-end tick on cold start that fades as oil pressure builds.",
+        "Sold individually - count 24 per bank set for a full V6."
+      ],
+      "verified": true,
+      "image": "assets/seed/rocker-arm.jpg"
+    }
+  ]
+}
