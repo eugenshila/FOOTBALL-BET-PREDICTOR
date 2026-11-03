@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Parts ID Engine — Identify · Stock · Post</title>
+<title>Verifix — Parts Inventory</title>
 <meta name="theme-color" content="#181a1e" />
-<link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=verifix-20261030-9" />
 <link rel="preload" href="/assets/fonts/BarlowCondensed-Bold.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="preload" href="/assets/fonts/Barlow-Medium.ttf" as="font" type="font/ttf" crossorigin />
 </head>
@@ -14,8 +14,8 @@
   <div class="brand">
     <span class="brand-mark"></span>
     <div>
-      <h1 id="shop-name">SHILA AUTO PARTS</h1>
-      <p id="shop-tagline">OEM &amp; GENUINE SPARE PARTS</p>
+      <h1 id="shop-name">VERIFIX</h1>
+      <p id="shop-tagline">OEM PARTS · STOCK · PROMO</p>
     </div>
   </div>
   <div class="topbar-right">
@@ -28,6 +28,7 @@
   <button class="tab active" data-view="identify" role="tab">Identify</button>
   <button class="tab" data-view="inventory" role="tab">Inventory</button>
   <button class="tab" data-view="studio" role="tab">Promo studio</button>
+  <button class="tab" data-view="settings" role="tab">Settings</button>
 </nav>
 
 <main>
@@ -96,16 +97,38 @@
         <div class="row gap wrap">
           <input id="search" class="input" type="search" placeholder="Search name, OEM, bin, vehicle…" />
           <button id="btn-new-part" class="btn">＋ New part</button>
-          <button id="btn-import" class="btn ghost">⇪ Import CSV</button>
+          <button id="btn-import" class="btn ghost">⇪ Import stock</button>
           <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ Export</a>
-          <input id="csv-input" type="file" accept=".csv,text/csv" hidden />
+          <input id="csv-input" type="file" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
         </div>
+      </div>
+      <div id="import-block" class="import-block" hidden>
+        <div class="panel-head import-head">
+          <div>
+            <h3 class="sources-title">Import stock file</h3>
+            <p class="muted small import-lead">Review the file first. Nothing is saved until you apply the import.</p>
+          </div>
+          <div class="row gap" id="import-actions"><button id="btn-close-import" class="btn ghost small-btn">Close</button></div>
+        </div>
+        <div class="import-formats" aria-label="Supported file types">
+          <span>CSV</span><span>Excel · XLSX</span><span>Text PDF</span>
+        </div>
+        <div id="stock-dropzone" class="stock-dropzone" tabindex="0" role="button" aria-label="Choose or drop a stock file">
+          <div class="stock-drop-icon" aria-hidden="true">↑</div>
+          <div>
+            <strong>Drop your stock file here</strong>
+            <p class="muted small">or <button type="button" id="btn-pick-stock-file" class="link-button">choose a file</button></p>
+          </div>
+        </div>
+        <p class="import-guidance muted small">For part photos, use an Excel <code>Photo</code> column and insert one picture on each part’s row. PDFs need selectable text; scanned PDFs need OCR first.</p>
+        <label class="check import-update"><input type="checkbox" id="import-update-existing" checked /> Merge matching parts <span class="muted small">Add uploaded quantities to current stock; alternate numbers use the same record</span></label>
+        <div id="import-summary"></div>
       </div>
       <div class="table-wrap">
         <table class="table">
           <thead>
             <tr>
-              <th>Part</th><th>OEM</th><th>Bin</th><th class="num">Qty</th>
+              <th>Part</th><th>OEM</th><th>Photo</th><th>Bin</th><th class="num">Qty</th>
               <th class="num">Price</th><th>Status</th><th></th>
             </tr>
           </thead>
@@ -113,13 +136,6 @@
         </table>
       </div>
       <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
-      <div id="import-block" class="import-block" hidden>
-        <div class="panel-head">
-          <h3 class="sources-title">CSV import</h3>
-          <div class="row gap" id="import-actions"></div>
-        </div>
-        <div id="import-summary"></div>
-      </div>
     </div>
   </section>
 
@@ -128,7 +144,15 @@
     <div class="panel">
       <div class="panel-head">
         <h2 class="panel-title">WhatsApp promo generator</h2>
-        <select id="studio-part" class="input select"></select>
+        <div class="studio-part-picker">
+          <div class="studio-search-row">
+            <input id="studio-search" class="input" type="search" placeholder="Search part name or number…" aria-label="Search promo parts" />
+            <button id="btn-search-part" class="btn ghost" type="button">Search</button>
+          </div>
+          <div id="studio-search-results" class="studio-search-results" role="listbox" aria-label="Part search results" hidden></div>
+          <p id="studio-selected-part" class="studio-selected-part muted small">No part selected</p>
+          <input id="studio-part" type="hidden" />
+        </div>
       </div>
       <div class="row gap wrap studio-controls">
         <label class="field grow">
@@ -151,6 +175,44 @@
           <button id="btn-copy" class="btn ghost small-btn">Copy</button>
         </div>
         <pre id="caption-text" class="caption"></pre>
+        <div id="studio-social-links" class="row gap wrap" aria-label="Shop social profile links"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SETTINGS ─────────────────────────────────────────────── -->
+  <section id="view-settings" class="view">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Shop details &amp; social links</h2>
+          <p class="muted small">These public details appear in generated promo captions. Profile links open your existing pages.</p>
+        </div>
+      </div>
+      <form id="shop-settings-form" class="settings-grid">
+        <label class="field"><span>Shop name</span><input class="input" name="shop_name" maxlength="80" required /></label>
+        <label class="field"><span>Tagline</span><input class="input" name="tagline" maxlength="140" /></label>
+        <label class="field"><span>WhatsApp business number</span><input class="input" name="whatsapp_number" maxlength="40" placeholder="+254 7xx xxx xxx" /></label>
+        <label class="field"><span>Currency</span><input class="input" name="currency" maxlength="8" required /></label>
+        <label class="field span2"><span>Location</span><input class="input" name="location" maxlength="120" /></label>
+        <label class="field"><span>Facebook page URL</span><input class="input" name="facebook" type="url" placeholder="https://facebook.com/your-page" /></label>
+        <label class="field"><span>Instagram profile URL</span><input class="input" name="instagram" type="url" placeholder="https://instagram.com/your-account" /></label>
+        <label class="field"><span>TikTok profile URL</span><input class="input" name="tiktok" type="url" placeholder="https://tiktok.com/@your-account" /></label>
+        <label class="field"><span>X profile URL</span><input class="input" name="x" type="url" placeholder="https://x.com/your-account" /></label>
+        <div class="span2 row gap wrap">
+          <button class="btn primary" type="submit" id="btn-save-settings">Save details</button>
+          <span id="settings-status" class="status" role="status"></span>
+        </div>
+      </form>
+      <div id="settings-social-links" class="row gap wrap" aria-label="Saved external social pages"></div>
+      <div class="settings-note">
+        <strong>Account publishing</strong>
+        <p class="muted small">These links point to your public pages; they do not log in or publish for you. Direct publishing needs a public HTTPS app, approved developer apps and a secure account-connection flow. Do not enter passwords or access tokens here.</p>
+      </div>
+      <div class="settings-note">
+        <strong>Cloud backup</strong>
+        <p class="muted small">A backup script and Windows Task Scheduler setup guide are included with the project. Cloud upload stays disabled until you configure a private S3-compatible bucket and credentials in the local <code>.env</code> file.</p>
+        <a class="btn ghost small-btn" href="/help/cloud-backups" target="_blank" rel="noopener">Read backup setup</a>
       </div>
     </div>
   </section>
@@ -183,6 +245,8 @@
       <label class="field"><span>Fitment — engine / years</span><input class="input" name="fit_engine_years" placeholder="3.6L Pentastar V6 / 2011-2021" /></label>
       <label class="field span2"><span>Service notes (one per line)</span><textarea class="input" name="technical_notes" rows="3"></textarea></label>
       <label class="field span2"><span>Photo path or URL</span><input class="input" name="image_path" placeholder="assets/seed/pcv-valve.jpg" /></label>
+      <label class="field span2"><span>Or choose a photo from your computer</span><input class="input photo-file-input" type="file" name="part_image" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" /></label>
+      <div class="span2 part-photo-preview" id="part-photo-preview" hidden></div>
       <label class="check span2"><input type="checkbox" name="verified" /> Verified — I have confirmed the OEM number against the EPC</label>
     </div>
     <div class="row gap end">
@@ -193,6 +257,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=verifix-20261030-9"></script>
 </body>
 </html>

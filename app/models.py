@@ -178,6 +178,35 @@ class PartUpdate(BaseModel):
     fitment_text: str | None = None
 
 
+class ShopProfileUpdate(BaseModel):
+    shop_name: str = Field(min_length=1, max_length=80)
+    tagline: str = Field(default="", max_length=140)
+    whatsapp_number: str = Field(default="", max_length=40)
+    currency: str = Field(default="KES", min_length=1, max_length=8)
+    location: str = Field(default="", max_length=120)
+    social_links: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("social_links")
+    @classmethod
+    def _valid_social_links(cls, value: dict[str, str]) -> dict[str, str]:
+        from urllib.parse import urlsplit
+
+        allowed = {"facebook", "instagram", "tiktok", "x"}
+        links: dict[str, str] = {}
+        for key, raw in value.items():
+            if key not in allowed:
+                raise ValueError(f"unsupported social link: {key}")
+            url = str(raw or "").strip()
+            if url:
+                parsed = urlsplit(url)
+                if parsed.scheme != "https" or not parsed.netloc:
+                    raise ValueError(f"{key} link must be a complete https:// URL")
+                if len(url) > 500:
+                    raise ValueError(f"{key} link is too long")
+            links[key] = url
+        return {key: links.get(key, "") for key in allowed}
+
+
 class StockMovement(BaseModel):
     """Audit trail for every quantity change."""
 

@@ -60,7 +60,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ./.venv/bin/python -m app.cli lookup 5184894AA           # counter lookup by OEM/x-ref
 ./.venv/bin/python -m app.cli identify photo.jpg --cards # identify + render cards
 ./.venv/bin/python -m app.cli cards --part-id 2 --formats story,square
-./.venv/bin/python -m app.cli import-csv stock.csv       # dry run, then --apply
+./.venv/bin/python -m app.cli import-csv stock.csv       # CSV dry run, then --apply
 ./.venv/bin/python -m app.cli export-csv --out stock.csv # round-trip export
 ./.venv/bin/python -m app.cli check-db                   # diagnose the database
 ./.venv/bin/python -m app.cli check-providers            # one live call per provider
@@ -92,6 +92,21 @@ TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test \
 
 The full suite passes on both engines (95 tests on PostgreSQL, where a few
 engine-specific tests also run).
+
+### Importing stock lists in the web app
+
+The **Stock → Import stock file** button accepts CSV, Excel `.xlsx`, and PDFs with
+selectable text and a recognizable table header. In Excel, use a `Part Name` (or
+`Description`) column and put at most one inserted picture in the `Photo` column
+on each part's row. The dry run reports the row counts and embedded photo count;
+photos are saved and attached when you apply the import. Insert pictures in the
+`Photo` cells using the ordinary **Insert → Pictures** workflow and align each
+picture to its part's row. If parts already exist,
+enable **Update matching OEM records** before selecting the file to attach their
+photos to matching OEM records. That option can replace existing part details.
+
+PDF import reads selectable table text. A scanned PDF needs OCR first, and photos
+should be embedded in an Excel `.xlsx` file rather than a PDF.
 
 ---
 

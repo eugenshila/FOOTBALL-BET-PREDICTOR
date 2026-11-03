@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import io
 import logging
 import os
@@ -19,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, importers, links, storage, vision
+from . import cards, db, importers, links, shop_profile, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -32,6 +33,7 @@ from .models import (
     InventoryPart,
     PartCreate,
     PartUpdate,
+    ShopProfileUpdate,
     StockMovement,
 )
 from .report import render_report
@@ -203,6 +205,30 @@ def patch_part(part_id: int, payload: PartUpdate) -> InventoryPart:
         payload.fitment_text = None
     try:
         part = db.update_part(part_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if part is None:
+        raise HTTPException(status_code=404, detail="part not found")
+    return part
+
+
+@app.post("/api/parts/{part_id}/image", response_model=InventoryPart)
+async def upload_part_image(part_id: int, file: UploadFile = File(...)) -> InventoryPart:
+    """Attach a normalized photo directly to an existing inventory record."""
+    if db.get_part(part_id) is None:
+        raise HTTPException(status_code=404, detail="part not found")
+    mime = (file.content_type or "").lower()
+    if mime not in ALLOWED_MIME:
+        raise HTTPException(status_code=415, detail=f"unsupported image type: {mime or 'unknown'}")
+    raw = await file.read(MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=422, detail="empty upload")
+    if len(raw) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"image larger than {settings.max_upload_mb} MB")
+    path, _normalised = _store_upload(raw, file.filename or "part-image.jpg")
+    relative = str(path.relative_to(BASE_DIR)) if path.is_relative_to(BASE_DIR) else str(path)
+    try:
+        part = db.update_part(part_id, PartUpdate(image_path=relative))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if part is None:
@@ -401,7 +427,7 @@ def _request_origin(request: Request) -> str:
 async def import_parts(
     file: UploadFile = File(...),
     dry_run: bool = Query(True, description="Parse and report without writing anything"),
-    update_existing: bool = Query(False, description="Fill blanks on records matching an OEM number"),
+    update_existing: bool = Query(True, description="Merge matching OEM/alternate numbers and add imported quantities"),
     mark_verified: bool = Query(
         False, description="Treat the file as the shop's own verified records"
     ),
@@ -409,16 +435,65 @@ async def import_parts(
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=422, detail="empty file")
-    if len(raw) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="CSV larger than 8 MB")
+    if len(raw) > 64 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Stock file larger than 64 MB")
+
+    filename = (file.filename or "").lower()
+    upload = None
+    if filename and not filename.endswith((".csv", ".xlsx", ".pdf")):
+        raise HTTPException(status_code=415, detail="Upload a CSV, Excel .xlsx, or text-based PDF stock list")
+    try:
+        if filename.endswith(".xlsx"):
+            upload = stock_files.parse_xlsx(raw)
+        elif filename.endswith(".pdf"):
+            upload = stock_files.parse_pdf(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    csv_raw = upload.csv_bytes if upload else raw
+    saved_photos: dict[int, Path] = {}
+    if upload and upload.photos and not dry_run:
+        try:
+            rows = list(csv.reader(io.StringIO(csv_raw.decode("utf-8-sig"))))
+            photo_column = rows[0].index("Photo")
+            oem_column = rows[0].index("OEM Part Number")
+            photo_oems: set[str] = set()
+            for row_number in upload.photos:
+                oem = rows[row_number - 1][oem_column].strip().upper()
+                if oem and oem in photo_oems:
+                    raise ValueError(f"More than one embedded photo was supplied for OEM {oem}; keep one photo per part number.")
+                if oem:
+                    photo_oems.add(oem)
+            for row_number, (image_name, image_raw) in upload.photos.items():
+                path, _ = _store_upload(image_raw, image_name)
+                rows[row_number - 1][photo_column] = f"uploads/{path.name}"
+                saved_photos[row_number] = path
+            output = io.StringIO(newline="")
+            csv.writer(output).writerows(rows)
+            csv_raw = output.getvalue().encode("utf-8-sig")
+        except Exception as exc:  # noqa: BLE001 - clean staged images on every attachment failure
+            for path in saved_photos.values():
+                path.unlink(missing_ok=True)
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(status_code=422, detail=f"Could not attach embedded Excel photos: {exc}") from exc
 
     report = importers.import_csv(
-        raw,
+        csv_raw,
         dry_run=dry_run,
         update_existing=update_existing,
         default_currency=settings.currency,
         default_verified=mark_verified,
     )
+    retained_rows: set[int] = set()
+    if saved_photos:
+        retained_rows = {
+            result.row for result in report.results
+            if result.status in {"created", "updated"}
+        }
+        for row_number, path in saved_photos.items():
+            if row_number not in retained_rows:
+                path.unlink(missing_ok=True)
     payload = report.summary()
     payload["results"] = [
         {
@@ -432,6 +507,8 @@ async def import_parts(
         for r in report.results[:500]
     ]
     payload["stats"] = db.stats()
+    payload["images_found"] = len(upload.photos) if upload else 0
+    payload["images_attached"] = len(set(saved_photos) & retained_rows)
     return payload
 
 
@@ -447,6 +524,13 @@ def export_parts() -> PlainTextResponse:
 
 # --- promotional cards -----------------------------------------------------
 def _card_context(request: CardRequest) -> tuple[InventoryPart, cards.CardContext]:
+    profile = shop_profile.get_profile()
+    branding = {
+        "shop": profile["shop_name"],
+        "tagline": profile["tagline"],
+        "phone": profile["whatsapp_number"],
+        "location": profile["location"],
+    }
     if request.part_id is not None:
         part = db.get_part(request.part_id)
         if part is None:
@@ -463,6 +547,7 @@ def _card_context(request: CardRequest) -> tuple[InventoryPart, cards.CardContex
             part=part,
             headline=request.headline,
             image_path=request.image_path or None,
+            **branding,
         )
 
     if request.part is None:
@@ -487,7 +572,8 @@ def _card_context(request: CardRequest) -> tuple[InventoryPart, cards.CardContex
         verified=payload.verified,
     )
     return preview, cards.CardContext(
-        part=preview, headline=request.headline, image_path=request.image_path or None
+        part=preview, headline=request.headline, image_path=request.image_path or None,
+        **branding,
     )
 
 
@@ -549,12 +635,9 @@ def reseed(force: bool = False) -> dict:
 
 @app.get("/api/config")
 def public_config() -> dict:
+    profile = shop_profile.get_profile()
     return {
-        "shop_name": settings.shop_name,
-        "tagline": settings.shop_tagline,
-        "whatsapp_number": settings.whatsapp_number,
-        "currency": settings.currency,
-        "location": settings.location,
+        **profile,
         "formats": [
             {"key": f.key, "width": f.width, "height": f.height, "label": f.label}
             for f in cards.FORMATS.values()
@@ -563,6 +646,23 @@ def public_config() -> dict:
         "vision": vision.describe(),
         "lens_supported": bool(links.resolve_base_url("")),
     }
+
+
+@app.put("/api/settings")
+def update_shop_settings(payload: ShopProfileUpdate, request: Request) -> dict:
+    """Save local shop profile values; this endpoint is intentionally loopback-only."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="Shop settings can only be changed from this computer")
+    return shop_profile.save_profile(payload)
+
+
+@app.get("/help/cloud-backups")
+def cloud_backup_help() -> FileResponse:
+    guide = BASE_DIR / "docs" / "CLOUD_BACKUPS.md"
+    if not guide.is_file():
+        raise HTTPException(status_code=404, detail="Cloud backup guide not found")
+    return FileResponse(guide, media_type="text/markdown", filename="VERIFIX-cloud-backups.md")
 
 
 @app.exception_handler(ValueError)
@@ -578,7 +678,7 @@ def _explain_database_problem(message: str) -> None:
         f"│ {message.splitlines()[0]}\n"
         "│\n"
         "│ Fix it with one of these:\n"
-        "│   · start PostgreSQL (Windows: Start-Service postgresql-x64-17)\n"
+        "│   · start PostgreSQL (Windows: Start-Service postgresql-x64-18)\n"
         "│   · check DATABASE_URL in .env - see RUNNING.md step 3\n"
         '│   · missing driver:  pip install -r requirements-postgres.txt\n'
         "│   · no database server? unset DATABASE_URL to use SQLite instead\n"

@@ -15,6 +15,7 @@ data/inventory.db
 data/imports/
 data/inventory.db-*
 data/feature_cache.json
+data/shop_profile.json
 uploads/
 exports/
 

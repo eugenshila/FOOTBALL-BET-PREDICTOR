@@ -27,6 +27,81 @@ const escapeHtml = (value) =>
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[ch]));
 
+const SOCIAL_PLATFORMS = [
+  ["facebook", "Facebook"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["x", "X"],
+];
+
+function populateShopSettings(profile) {
+  const form = $("#shop-settings-form");
+  if (!form || !profile) return;
+  for (const key of ["shop_name", "tagline", "whatsapp_number", "currency", "location"]) {
+    form.elements[key].value = profile[key] || "";
+  }
+  for (const [key] of SOCIAL_PLATFORMS) {
+    form.elements[key].value = profile.social_links?.[key] || "";
+  }
+  renderSocialLinks($("#settings-social-links"), profile.social_links);
+}
+
+function renderSocialLinks(container, links = {}) {
+  if (!container) return;
+  const active = SOCIAL_PLATFORMS.filter(([key]) => links[key]);
+  container.innerHTML = active.map(([key, label]) =>
+    `<a class="btn ghost small-btn" href="${escapeHtml(links[key])}" target="_blank" rel="noopener noreferrer">Open ${label}</a>`
+  ).join("");
+  container.hidden = active.length === 0;
+}
+
+async function saveShopSettings(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#btn-save-settings");
+  const status = $("#settings-status");
+  const values = new FormData(form);
+  const payload = {
+    shop_name: values.get("shop_name").trim(),
+    tagline: values.get("tagline").trim(),
+    whatsapp_number: values.get("whatsapp_number").trim(),
+    currency: values.get("currency").trim(),
+    location: values.get("location").trim(),
+    social_links: Object.fromEntries(SOCIAL_PLATFORMS.map(([key]) => [key, values.get(key).trim()])),
+  };
+  button.disabled = true;
+  button.textContent = "Saving…";
+  status.textContent = "";
+  try {
+    const profile = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+    state.config = { ...state.config, ...profile };
+    $("#shop-name").textContent = profile.shop_name;
+    $("#shop-tagline").textContent = profile.tagline;
+    renderSocialLinks($("#settings-social-links"), profile.social_links);
+    renderSocialLinks($("#studio-social-links"), profile.social_links);
+    status.className = "status";
+    status.textContent = "Saved on this computer. New promo captions will use these details.";
+    toast("Shop details saved");
+  } catch (error) {
+    status.className = "status error";
+    status.textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save details";
+  }
+}
+
+// Remote catalog thumbnails can expire or block hotlinking. Keep the inventory
+// usable and give the owner a clear, replaceable placeholder instead.
+document.addEventListener("error", (event) => {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement) || img.dataset.fallbackApplied) return;
+  img.dataset.fallbackApplied = "true";
+  const fallback = document.createElement("span");
+  fallback.className = `image-fallback${img.classList.contains("match-photo") ? " large" : ""}${img.closest(".card-item") ? " card-fallback" : ""}`;
+  fallback.textContent = "Photo unavailable";
+  if (img.closest(".part-photo-link")) img.closest(".part-photo-link").replaceWith(fallback);
+  else img.replaceWith(fallback);
+}, true);
+
 function toast(message, isError = false) {
   const el = $("#toast");
   el.textContent = message;
@@ -103,6 +178,8 @@ async function boot() {
       api("/api/config"), api("/api/health"), api("/api/stats"),
     ]);
     state.config = config;
+    populateShopSettings(config);
+    renderSocialLinks($("#studio-social-links"), config.social_links);
     $("#shop-name").textContent = config.shop_name;
     $("#shop-tagline").textContent = config.tagline;
     $("#max-mb").textContent = config.max_upload_mb;
@@ -317,7 +394,7 @@ function renderMatch(result) {
 
   body.innerHTML = `
     <div class="match-card">
-      ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(part.part_name)}" />` : ""}
+      ${imageUrl ? `<img class="match-photo" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(part.part_name)}" />` : '<div class="image-fallback large">No photo added</div>'}
       <div>
         <div class="part-name">${escapeHtml(part.part_name)}</div>
         <div class="kv">
@@ -365,11 +442,15 @@ function renderMatch(result) {
 
 function mediaUrl(path) {
   if (!path) return "";
-  if (path.startsWith("/")) return path;
-  if (path.startsWith("assets/seed/")) return `/api/demo-image/${path.split("/").pop().replace(/\.\w+$/, "")}`;
-  const file = path.split("/").pop();
-  if (path.startsWith("uploads/")) return `/media/uploads/${file}`;
-  if (path.startsWith("exports/")) return `/media/exports/${file}`;
+  const raw = String(path).trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const normalized = raw.replace(/\\/g, "/");
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("//")) return "";
+  if (normalized.startsWith("/")) return normalized;
+  if (normalized.startsWith("assets/seed/")) return `/api/demo-image/${normalized.split("/").pop().replace(/\.\w+$/, "")}`;
+  const file = normalized.split("/").pop();
+  if (normalized.startsWith("uploads/")) return `/media/uploads/${file}`;
+  if (normalized.startsWith("exports/")) return `/media/exports/${file}`;
   return "";
 }
 
@@ -396,6 +477,7 @@ async function loadParts(query = "") {
   try {
     state.parts = await api(`/api/parts?q=${encodeURIComponent(query)}`);
     renderParts();
+    populateStudioSelect();
     const stats = await api("/api/stats");
     renderStats(stats);
   } catch (error) {
@@ -408,6 +490,7 @@ function renderParts() {
   const parts = state.parts;
   $("#parts-empty").hidden = parts.length > 0;
   body.innerHTML = parts.map((part) => {
+    const photoUrl = mediaUrl(part.image_path);
     const status = part.quantity <= 0
       ? '<span class="tag out">out</span>'
       : part.quantity <= 3
@@ -420,6 +503,11 @@ function renderParts() {
         <div class="part-sub">${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}</div>
       </td>
       <td class="mono">${escapeHtml(part.oem_part_number || "—")}</td>
+      <td>
+        <input class="part-photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${part.id}" hidden />
+        <button class="btn tiny" type="button" data-photo="${part.id}" title="${part.image_path ? "Replace" : "Add"} this part's photo">${part.image_path ? "Replace photo" : "Add photo"}</button>
+        ${photoUrl ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View current photo"><img class="part-photo-thumb" src="${escapeHtml(photoUrl)}" alt="Photo of ${escapeHtml(part.part_name)}" /></a>` : (part.image_path ? '<span class="image-fallback">Photo unavailable</span>' : "")}
+      </td>
       <td>${escapeHtml(part.bin_location || "—")}</td>
       <td class="num">${part.quantity}</td>
       <td class="num">${escapeHtml(money(part.unit_price, part.currency))}</td>
@@ -430,6 +518,27 @@ function renderParts() {
       </td>
     </tr>`;
   }).join("");
+
+  $$('[data-photo]', body).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    body.querySelector(`[data-photo-input="${button.dataset.photo}"]`)?.click();
+  }));
+  $$('[data-photo-input]', body).forEach((input) => input.addEventListener("change", async (event) => {
+    event.stopPropagation();
+    const file = input.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await api(`/api/parts/${input.dataset.photo}/image`, { method: "POST", body: formData });
+      toast("Photo saved to part");
+      await loadParts($("#search").value);
+    } catch (error) {
+      toast(error.message, true);
+      input.value = "";
+    }
+  }));
+  $$(".part-photo-link", body).forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
 
   $$("[data-card]", body).forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -472,6 +581,8 @@ function openDrawer(prefill = {}) {
     const field = form.elements[key];
     if (field) field.value = value;
   });
+  form.elements.part_image.value = "";
+  renderDrawerPhoto(prefill.image_path || "");
   form.elements.verified.checked = Boolean(prefill.verified);
   $("#drawer").hidden = false;
   form.elements.part_name.focus();
@@ -479,11 +590,34 @@ function openDrawer(prefill = {}) {
 
 function closeDrawer() { $("#drawer").hidden = true; }
 
+function renderDrawerPhoto(path, localFile = null) {
+  const preview = $("#part-photo-preview");
+  if (localFile) {
+    preview.innerHTML = `<span class="muted small">Selected photo: ${escapeHtml(localFile.name)}</span><br><img class="drawer-photo-preview" src="${URL.createObjectURL(localFile)}" alt="Selected part photo preview" />`;
+    preview.hidden = false;
+  } else if (path) {
+    preview.innerHTML = `<span class="muted small">Current photo</span><br><img class="drawer-photo-preview" src="${escapeHtml(mediaUrl(path))}" alt="Current part photo" />`;
+    preview.hidden = false;
+  } else {
+    preview.innerHTML = "";
+    preview.hidden = true;
+  }
+}
+
+$("#part-form").elements.part_image.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  const path = $("#part-form").elements.image_path.value;
+  renderDrawerPhoto(path, file || null);
+});
+
 const splitList = (value) => String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
 
 async function savePart(event) {
   event.preventDefault();
   const form = event.target;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton?.disabled) return;
+  if (submitButton) { submitButton.disabled = true; submitButton.textContent = "Saving…"; }
   const get = (name) => form.elements[name]?.value ?? "";
   const id = get("id");
   const makeModel = get("fit_make_model").trim();
@@ -511,35 +645,88 @@ async function savePart(event) {
   };
 
   try {
+    let saved;
     if (id) {
-      await api(`/api/parts/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-      toast("Part updated");
+      saved = await api(`/api/parts/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
     } else {
-      const created = await api("/api/parts", { method: "POST", body: JSON.stringify(payload) });
-      toast(`Added part #${created.id}`);
+      saved = await api("/api/parts", { method: "POST", body: JSON.stringify(payload) });
+      form.elements.id.value = saved.id;
+      $("#drawer-title").textContent = `Part #${saved.id}`;
+    }
+    const photo = form.elements.part_image.files?.[0];
+    if (photo) {
+      const imageForm = new FormData();
+      imageForm.append("file", photo);
+      saved = await api(`/api/parts/${saved.id}/image`, { method: "POST", body: imageForm });
     }
     closeDrawer();
     await loadParts($("#search").value);
+    let successMessage = id ? "Part updated" : `Added part #${saved.id}`;
+    if (id && !state.parts.some((part) => part.id === Number(id))) {
+      // Editing a name can make a row stop matching the active old-name search.
+      // Clear that filter so the saved record remains visible after the update.
+      $("#search").value = "";
+      await loadParts("");
+      successMessage = "Part updated — search cleared to show the renamed record";
+    }
+    toast(successMessage);
     populateStudioSelect();
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    if (submitButton) { submitButton.disabled = false; submitButton.textContent = "Save part"; }
   }
 }
 
 /* ── studio ───────────────────────────────────────────────── */
 function populateStudioSelect() {
-  const select = $("#studio-part");
-  const previous = select.value;
-  select.innerHTML = state.parts
-    .map((p) => `<option value="${p.id}">${escapeHtml(p.part_name)} — ${escapeHtml(p.oem_part_number || "no OEM")}${p.verified ? "" : " (unverified)"}</option>`)
-    .join("");
-  if (previous) select.value = previous;
+  const selected = state.parts.find((part) => String(part.id) === $("#studio-part").value)
+    || state.parts[0];
+  if (selected) setStudioPart(selected);
+}
+
+function setStudioPart(part) {
+  if (!state.parts.some((item) => item.id === part.id)) state.parts.unshift(part);
+  $("#studio-part").value = String(part.id);
+  $("#studio-selected-part").textContent = `${part.part_name} · ${part.oem_part_number || "no OEM number"}`;
+  $("#studio-search-results").hidden = true;
+  $("#studio-search-results").innerHTML = "";
+}
+
+async function searchStudioParts() {
+  const query = $("#studio-search").value.trim();
+  const results = $("#studio-search-results");
+  if (!query) {
+    toast("Enter a part name or number to search", true);
+    $("#studio-search").focus();
+    return;
+  }
+  const button = $("#btn-search-part");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  try {
+    const matches = await api(`/api/parts?q=${encodeURIComponent(query)}&limit=1000`);
+    results.hidden = false;
+    results.innerHTML = matches.length
+      ? matches.map((part) => `<button class="btn ghost studio-search-result" type="button" role="option" data-studio-result="${part.id}"><strong>${escapeHtml(part.part_name)}</strong><small>${escapeHtml(part.oem_part_number || "No OEM number")} · ${part.quantity} in stock</small></button>`).join("")
+      : '<span class="muted small">No matching parts found.</span>';
+    $$('[data-studio-result]', results).forEach((resultButton) => resultButton.addEventListener("click", () => {
+      const part = matches.find((item) => item.id === Number(resultButton.dataset.studioResult));
+      if (part) setStudioPart(part);
+    }));
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Search";
+  }
 }
 
 function openStudioFor(partId) {
   switchView("studio");
   populateStudioSelect();
-  $("#studio-part").value = String(partId);
+  const part = state.parts.find((item) => item.id === partId);
+  if (part) setStudioPart(part);
   generateCards();
 }
 
@@ -552,17 +739,26 @@ async function generateCards() {
   const status = $("#studio-status");
   status.className = "status busy";
   status.textContent = "Rendering cards…";
+  const generateButton = $("#btn-generate");
+  generateButton.disabled = true;
 
   try {
+    // Always load the current database record before generating. The inventory
+    // list/search result can be stale after verification or an edit.
+    const part = await api(`/api/parts/${encodeURIComponent(partId)}`);
+    setStudioPart(part);
     const result = await api("/api/cards", {
       method: "POST",
       body: JSON.stringify({
-        part_id: Number(partId),
+        part_id: part.id,
         formats,
         headline: $("#studio-headline").value.trim(),
       }),
     });
     const output = $("#card-output");
+    renderSocialLinks($("#studio-social-links"), state.config?.social_links);
+    $("#caption-block").hidden = false;
+    $("#caption-text").textContent = result.caption;
     output.innerHTML = result.cards.map((card) => `
       <div class="card-item">
         <a href="${escapeHtml(card.url)}" target="_blank" rel="noopener">
@@ -582,13 +778,19 @@ async function generateCards() {
     status.className = "status error";
     status.textContent = error.message;
     toast(error.message, true);
+  } finally {
+    generateButton.disabled = false;
   }
 }
 
-/* ── CSV import ───────────────────────────────────────────── */
-let pendingCsv = null;
+/* ── stock file import ────────────────────────────────────── */
+let pendingStockFile = null;
+let pendingUpdateExisting = false;
+let stockImportInProgress = false;
 
-async function sendCsv(file, dryRun) {
+async function sendStockFile(file, dryRun, updateExisting = false) {
+  if (!dryRun && stockImportInProgress) return;
+  if (!dryRun) stockImportInProgress = true;
   const block = $("#import-block");
   const summary = $("#import-summary");
   block.hidden = false;
@@ -598,25 +800,33 @@ async function sendCsv(file, dryRun) {
   form.append("file", file);
 
   try {
-    const query = `?dry_run=${dryRun}&update_existing=false`;
+    const query = `?dry_run=${dryRun}&update_existing=${updateExisting}`;
     const result = await api(`/api/inventory/import${query}`, { method: "POST", body: form });
-    renderImportSummary(result, file, dryRun);
+    renderImportSummary(result, file, dryRun, updateExisting);
     if (!dryRun) {
-      pendingCsv = null;
+      pendingStockFile = null;
       await loadParts($("#search").value);
       populateStudioSelect();
       toast(`Imported ${result.created} part(s)`);
     } else {
-      pendingCsv = file;
+      pendingStockFile = file;
+      pendingUpdateExisting = updateExisting;
     }
   } catch (error) {
     summary.innerHTML = `<p class="status error">${escapeHtml(error.message)}</p>`;
+    const applyButton = $("#btn-apply-import");
+    if (applyButton) { applyButton.disabled = false; applyButton.textContent = "Apply import"; }
+  } finally {
+    if (!dryRun) stockImportInProgress = false;
   }
 }
 
-function renderImportSummary(result, file, dryRun) {
+function renderImportSummary(result, file, dryRun, mergeMatches) {
   const summary = $("#import-summary");
   const actions = $("#import-actions");
+  const aliasRows = (result.results || []).filter((row) =>
+    row.status === "skipped" && row.message.includes("alternate/superseded number")
+  );
   const stat = (label, value, cls = "") =>
     `<div class="${cls}"><strong>${value}</strong>${label}</div>`;
 
@@ -624,10 +834,13 @@ function renderImportSummary(result, file, dryRun) {
     <p class="muted small">${escapeHtml(file.name)} · ${result.rows_total} rows read${dryRun ? " · dry run, nothing written yet" : ""}</p>
     <div class="import-stats">
       ${stat("new parts", result.created, "good")}
-      ${stat("updated", result.updated)}
+      ${stat(mergeMatches ? "matched · qty added" : "updated", result.updated)}
       ${stat("already in stock", result.skipped)}
       ${stat("problems", result.errors, result.errors ? "bad" : "")}
     </div>
+    ${mergeMatches ? '<p class="import-cols">Matching OEM or alternate numbers use the existing part record; uploaded quantities are added to current stock. The Excel file is not changed.</p>' : ""}
+    ${result.images_found ? `<p class="import-cols">${dryRun ? `${result.images_found} embedded photo(s) found` : `${result.images_attached || 0} photo(s) attached`}</p>` : ""}
+    ${aliasRows.length ? `<p class="import-cols">${aliasRows.length} row(s) whose OEM number is listed as an alternate/superseded number were kept as references and not added as separate parts: ${aliasRows.slice(0, 8).map((row) => `row ${row.row} · ${escapeHtml(row.oem_part_number)}`).join(", ")}${aliasRows.length > 8 ? ", …" : ""}</p>` : ""}
     ${result.problems.length ? `<ul class="import-problems">${result.problems.map((p) => `<li>row ${p.row}: ${escapeHtml(p.message)}</li>`).join("")}</ul>` : ""}
     <p class="import-cols">Columns mapped: ${Object.entries(result.columns_mapped).map(([from, to]) => `${escapeHtml(from)} → ${escapeHtml(to)}`).join(", ") || "none"}${result.ignored_columns.length ? ` · ignored: ${result.ignored_columns.map(escapeHtml).join(", ")}` : ""}</p>`;
 
@@ -637,15 +850,29 @@ function renderImportSummary(result, file, dryRun) {
     : `<button class="btn ghost small-btn" id="btn-cancel-import">Dismiss</button>`;
 
   if (dryRun) {
-    $("#btn-apply-import").addEventListener("click", () => {
-      if (pendingCsv) sendCsv(pendingCsv, false);
+    $("#btn-apply-import").addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      if (stockImportInProgress) return;
+      button.disabled = true;
+      button.textContent = "Importing…";
+      if (pendingStockFile) sendStockFile(pendingStockFile, false, pendingUpdateExisting);
     });
   }
   $("#btn-cancel-import").addEventListener("click", () => {
-    pendingCsv = null;
+    pendingStockFile = null;
     $("#import-block").hidden = true;
     $("#csv-input").value = "";
   });
+}
+
+function chooseStockFile(file) {
+  if (file) sendStockFile(file, true, $("#import-update-existing").checked);
+}
+
+function openImportPanel() {
+  const block = $("#import-block");
+  block.hidden = false;
+  block.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 /* ── navigation ───────────────────────────────────────────── */
@@ -659,18 +886,46 @@ function switchView(name) {
 
 function wireUi() {
   $$(".tab").forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+  $("#shop-settings-form").addEventListener("submit", saveShopSettings);
   $("#part-form").addEventListener("submit", savePart);
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
   $("#btn-new-part").addEventListener("click", () => openDrawer({}));
-  $("#btn-import").addEventListener("click", () => $("#csv-input").click());
+  $("#btn-import").addEventListener("click", openImportPanel);
+  $("#btn-close-import").addEventListener("click", () => { $("#import-block").hidden = true; });
+  $("#btn-pick-stock-file").addEventListener("click", (event) => {
+    event.stopPropagation();
+    $("#csv-input").click();
+  });
+  $("#import-update-existing").addEventListener("change", (event) => {
+    pendingUpdateExisting = event.target.checked;
+  });
   $("#csv-input").addEventListener("change", (event) => {
     const file = event.target.files[0];
-    if (file) sendCsv(file, true);
+    chooseStockFile(file);
     event.target.value = "";
   });
+  const stockDropzone = $("#stock-dropzone");
+  stockDropzone.addEventListener("click", () => $("#csv-input").click());
+  stockDropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("#csv-input").click(); }
+  });
+  ["dragenter", "dragover"].forEach((type) => stockDropzone.addEventListener(type, (event) => {
+    event.preventDefault(); stockDropzone.classList.add("dragover");
+  }));
+  ["dragleave", "drop"].forEach((type) => stockDropzone.addEventListener(type, (event) => {
+    event.preventDefault(); stockDropzone.classList.remove("dragover");
+  }));
+  stockDropzone.addEventListener("drop", (event) => {
+    const files = event.dataTransfer.files;
+    if (files.length > 1) { toast("Choose one stock file at a time", true); return; }
+    chooseStockFile(files[0]);
+  });
   $("#btn-generate").addEventListener("click", generateCards);
-  $("#studio-part").addEventListener("change", () => { /* wait for the button */ });
+  $("#btn-search-part").addEventListener("click", searchStudioParts);
+  $("#studio-search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); searchStudioParts(); }
+  });
   $("#btn-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText($("#caption-text").textContent);

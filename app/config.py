@@ -89,7 +89,7 @@ class Settings:
     public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
 
     # Shop identity used on generated cards.
-    shop_name: str = field(default_factory=lambda: os.getenv("SHOP_NAME", "SHILA AUTO PARTS"))
+    shop_name: str = field(default_factory=lambda: os.getenv("SHOP_NAME", "VERIFIX"))
     shop_tagline: str = field(default_factory=lambda: os.getenv("SHOP_TAGLINE", "OEM & GENUINE SPARE PARTS"))
     whatsapp_number: str = field(default_factory=lambda: os.getenv("WHATSAPP_NUMBER", "+254 700 000 000"))
     currency: str = field(default_factory=lambda: os.getenv("CURRENCY", "KES"))

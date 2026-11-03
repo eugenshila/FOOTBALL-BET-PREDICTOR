@@ -44,6 +44,11 @@ def connect(path: Path | str | None = None) -> Iterator[storage.Connection]:
 
 
 def _row_to_part(row: Any) -> InventoryPart:
+    image_path = row["image_path"] or ""
+    # Stock sheets often contain Windows-style relative paths (uploads\photo.jpg).
+    # Keep them portable so the UI and media URL mapper can serve the stored file.
+    if image_path and "://" not in image_path:
+        image_path = image_path.replace("\\", "/")
     return InventoryPart(
         id=row["id"],
         part_name=row["part_name"],
@@ -58,7 +63,7 @@ def _row_to_part(row: Any) -> InventoryPart:
         currency=row["currency"] or "KES",
         category=row["category"] or "",
         technical_notes=json.loads(row["technical_notes"] or "[]"),
-        image_path=row["image_path"] or "",
+        image_path=image_path,
         verified=bool(row["verified"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),

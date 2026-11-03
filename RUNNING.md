@@ -52,8 +52,9 @@ psql -U postgres
 ```
 
 If it asks for a password, use the one you chose when installing PostgreSQL.
-If `psql` is not found, add PostgreSQL's `bin` folder to your PATH — typically
-`C:\Program Files\PostgreSQL\17\bin`.
+If `psql` is not found, run it by its full path or add PostgreSQL's `bin` folder
+to your PATH — for PostgreSQL 18, typically
+`C:\Program Files\PostgreSQL\18\bin`.
 
 Once you are at the `postgres=#` prompt, paste these one at a time:
 
@@ -255,7 +256,7 @@ ends up in the repository.
 
 | Message | Fix |
 |---|---|
-| `Cannot reach PostgreSQL ... connection refused` | The service isn't running. Windows: `Get-Service *postgres*` then `Start-Service postgresql-x64-17`. macOS: `brew services start postgresql`. Linux: `sudo systemctl start postgresql` |
+| `Cannot reach PostgreSQL ... connection refused` | The service isn't running. Windows: check `Get-Service *postgres*`, then start the matching service (this laptop uses `Start-Service postgresql-x64-18`). macOS: `brew services start postgresql`. Linux: `sudo systemctl start postgresql` |
 | `password authentication failed` | Wrong password in `DATABASE_URL`, or you used a different user. Reset: `psql -U postgres -c "ALTER USER partsid_user WITH PASSWORD 'new';"` |
 | `database "partsid" does not exist` | Step 2 was skipped — run `CREATE DATABASE partsid;` |
 | `permission denied for schema public` | Run the two `GRANT` lines (including `\c partsid` first) from step 2 |
