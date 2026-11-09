@@ -67,6 +67,11 @@ def _row_to_part(row: Any) -> InventoryPart:
         verified=bool(row["verified"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        last_received_at=(
+            datetime.fromisoformat(row["last_received_at"])
+            if "last_received_at" in row.keys() and row["last_received_at"]
+            else None
+        ),
     )
 
 
@@ -88,7 +93,10 @@ def list_parts(
 ) -> list[InventoryPart]:
     with connect(path) as conn:
         like = conn.like
-        sql = "SELECT * FROM parts"
+        sql = """SELECT parts.*,
+                    (SELECT MAX(m.created_at) FROM movements m
+                     WHERE m.part_id = parts.id AND m.delta > 0) AS last_received_at
+                 FROM parts"""
         clauses: list[str] = []
         params: list[object] = []
         if query:

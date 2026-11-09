@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Verifix — Parts Inventory</title>
 <meta name="theme-color" content="#181a1e" />
-  <link rel="stylesheet" href="/static/styles.css?v=verifix-20261030-9" />
+  <link rel="stylesheet" href="/static/styles.css?v=verifix-20261109-11" />
 <link rel="preload" href="/assets/fonts/BarlowCondensed-Bold.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="preload" href="/assets/fonts/Barlow-Medium.ttf" as="font" type="font/ttf" crossorigin />
 </head>
@@ -129,6 +129,7 @@
           <thead>
             <tr>
               <th>Part</th><th>OEM</th><th>Photo</th><th>Bin</th><th class="num">Qty</th>
+              <th><button id="sort-received" class="table-sort" type="button" aria-label="Sort by date received">Date received ↕</button></th>
               <th class="num">Price</th><th>Status</th><th></th>
             </tr>
           </thead>
@@ -257,6 +258,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/static/app.js?v=verifix-20261030-9"></script>
+<script src="/static/app.js?v=verifix-20261109-11"></script>
 </body>
 </html>

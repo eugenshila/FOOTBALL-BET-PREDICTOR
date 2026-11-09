@@ -10,6 +10,7 @@ const state = {
   selectedFile: null,
   lastScan: null,
   currentPart: null,
+  receivedSort: 0,
 };
 
 /* ── tiny helpers ─────────────────────────────────────────── */
@@ -487,7 +488,16 @@ async function loadParts(query = "") {
 
 function renderParts() {
   const body = $("#parts-body");
-  const parts = state.parts;
+  const parts = [...state.parts];
+  if (state.receivedSort) {
+    parts.sort((a, b) => {
+      const aDate = a.last_received_at ? Date.parse(a.last_received_at) : null;
+      const bDate = b.last_received_at ? Date.parse(b.last_received_at) : null;
+      if (aDate === null) return bDate === null ? 0 : 1;
+      if (bDate === null) return -1;
+      return state.receivedSort * (aDate - bDate);
+    });
+  }
   $("#parts-empty").hidden = parts.length > 0;
   body.innerHTML = parts.map((part) => {
     const photoUrl = mediaUrl(part.image_path);
@@ -497,6 +507,9 @@ function renderParts() {
         ? `<span class="tag low">low · ${part.quantity}</span>`
         : `<span class="tag in">in stock</span>`;
     const verified = part.verified ? "" : ' <span class="tag unverified">unverified</span>';
+    const received = part.last_received_at
+      ? new Date(part.last_received_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : "—";
     return `<tr data-id="${part.id}">
       <td>
         <div class="part-name">${escapeHtml(part.part_name)}</div>
@@ -510,6 +523,7 @@ function renderParts() {
       </td>
       <td>${escapeHtml(part.bin_location || "—")}</td>
       <td class="num">${part.quantity}</td>
+      <td title="Latest recorded positive stock movement">${escapeHtml(received)}</td>
       <td class="num">${escapeHtml(money(part.unit_price, part.currency))}</td>
       <td>${status}${verified}</td>
       <td class="num">
@@ -554,6 +568,12 @@ function renderParts() {
     if (record) openDrawer(record);
   }));
 }
+
+$("#sort-received")?.addEventListener("click", () => {
+  state.receivedSort = state.receivedSort === -1 ? 1 : -1;
+  $("#sort-received").textContent = state.receivedSort === -1 ? "Date received ↓" : "Date received ↑";
+  renderParts();
+});
 
 /* ── drawer / form ────────────────────────────────────────── */
 function openDrawer(prefill = {}) {

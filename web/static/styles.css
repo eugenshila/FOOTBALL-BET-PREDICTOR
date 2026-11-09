@@ -342,6 +342,8 @@ pre.caption { background: #14171b; border: 1px solid var(--edge); border-left: 3
   margin: 14px 0 18px; border: 1px solid var(--edge); border-radius: 10px;
   padding: 18px; background: linear-gradient(145deg, #171a1f, #14171b);
 }
+.table-sort { border: 0; padding: 0; color: inherit; background: none; font: inherit; cursor: pointer; }
+.table-sort:hover { color: var(--silver); }
 .import-head { align-items: flex-start; }
 .import-block .sources-title { margin: 0 0 4px; }
 .import-lead { margin: 0; }

@@ -116,6 +116,7 @@ class InventoryPart(BaseModel):
     verified: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    last_received_at: datetime | None = None
 
     @field_validator("quantity")
     @classmethod
