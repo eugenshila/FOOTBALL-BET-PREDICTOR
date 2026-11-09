@@ -27,6 +27,7 @@
 <nav class="tabs" role="tablist">
   <button class="tab active" data-view="identify" role="tab">Identify</button>
   <button class="tab" data-view="inventory" role="tab">Inventory</button>
+  <button class="tab" id="reports-tab" data-view="reports" role="tab">Reports</button>
   <button class="tab" data-view="studio" role="tab">Promo studio</button>
   <button class="tab" data-view="settings" role="tab">Settings</button>
 </nav>
@@ -98,7 +99,7 @@
           <input id="search" class="input" type="search" placeholder="Search name, OEM, bin, vehicle…" />
           <button id="btn-new-part" class="btn">＋ New part</button>
           <button id="btn-import" class="btn ghost">⇪ Import stock</button>
-          <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ Export</a>
+          <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ CSV Export</a>
           <input id="csv-input" type="file" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
         </div>
       </div>
@@ -137,6 +138,23 @@
         </table>
       </div>
       <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
+    </div>
+  </section>
+
+  <!-- ── REPORTS ──────────────────────────────────────────────── -->
+  <section id="view-reports" class="view" role="tabpanel" aria-labelledby="reports-tab">
+    <div class="panel">
+      <div>
+        <h2 class="panel-title">Part verification report</h2>
+        <p class="muted">Review how many inventory records have a confirmed OEM number, then download the full Excel workbook.</p>
+      </div>
+      <div class="report-counts" aria-live="polite">
+        <div class="report-count verified"><strong id="report-verified-count">—</strong><span>Verified parts</span></div>
+        <div class="report-count unverified"><strong id="report-unverified-count">—</strong><span>Not verified</span></div>
+      </div>
+      <p id="report-summary-status" class="status" role="status"></p>
+      <a id="btn-verification-export" class="btn primary" href="/api/inventory-verification.xlsx" download>Download Excel report</a>
+      <p class="muted small">The workbook has separate Verified and Not Verified sheets and includes the part numbers, fitment, stock, and record details.</p>
     </div>
   </section>
 

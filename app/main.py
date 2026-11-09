@@ -37,6 +37,7 @@ from .models import (
     StockMovement,
 )
 from .report import render_report
+from .verification_report import build_verification_workbook
 
 log = logging.getLogger(__name__)
 
@@ -519,6 +520,17 @@ def export_parts() -> PlainTextResponse:
         csv_text,
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="inventory.csv"'},
+    )
+
+
+@app.get("/api/inventory-verification.xlsx")
+def export_verification_report() -> Response:
+    workbook = build_verification_workbook(db.list_parts(limit=100000))
+    filename = f"parts-verification-{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

@@ -16,6 +16,8 @@ data/imports/
 data/inventory.db-*
 data/feature_cache.json
 data/shop_profile.json
+data/*-startup.log
+data/*-uvicorn-*.log
 uploads/
 exports/
 

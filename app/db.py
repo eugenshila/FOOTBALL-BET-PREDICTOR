@@ -343,7 +343,9 @@ def stats(*, path: Path | str | None = None) -> dict[str, object]:
         totals = conn.execute(
             "SELECT COUNT(*) AS parts, COALESCE(SUM(quantity),0) AS units, "
             "COALESCE(SUM(quantity*unit_price),0) AS value, "
-            "COALESCE(SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END),0) AS out_of_stock "
+            "COALESCE(SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END),0) AS out_of_stock, "
+            "COALESCE(SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END),0) AS verified_parts, "
+            "COALESCE(SUM(CASE WHEN verified = 0 THEN 1 ELSE 0 END),0) AS unverified_parts "
             "FROM parts"
         ).fetchone()
         scans = conn.execute("SELECT COUNT(*) AS c FROM scans").fetchone()
@@ -352,5 +354,7 @@ def stats(*, path: Path | str | None = None) -> dict[str, object]:
         "units": int(totals["units"]),
         "inventory_value": round(float(totals["value"]), 2),
         "out_of_stock": int(totals["out_of_stock"]),
+        "verified_parts": int(totals["verified_parts"]),
+        "unverified_parts": int(totals["unverified_parts"]),
         "scans": int(scans["c"]),
     }

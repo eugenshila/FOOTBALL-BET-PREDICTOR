@@ -134,6 +134,25 @@ Leave that window open. Then open <http://localhost:8000> in your browser.
 - Add `--reload` while developing so edits apply automatically.
 - Stop with **Ctrl+C**.
 
+### Start automatically after Windows sign-in
+
+PostgreSQL is configured to start automatically on this PC. To start the app
+when your Windows account signs in, run this once from PowerShell in the project
+folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\register_app_startup_task.ps1
+```
+
+The task waits up to two minutes for PostgreSQL, then starts the app in the
+background on port 8000. It skips launch if that port is already in use. Check
+`data\app-startup.log` for startup status and `data\app-uvicorn-error.log` for
+app errors. To remove automatic startup, run:
+
+```powershell
+Unregister-ScheduledTask -TaskName "VERIFIX App Startup" -Confirm:$false
+```
+
 First page load should show a green-ish provider badge and `4 parts · 47 units`
 in the top-right. If the badge says *Offline reference matcher*, that is normal
 until you add a key.

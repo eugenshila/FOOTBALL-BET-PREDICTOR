@@ -896,10 +896,24 @@ function openImportPanel() {
 }
 
 /* ── navigation ───────────────────────────────────────────── */
+async function loadVerificationSummary() {
+  const status = $("#report-summary-status");
+  status.textContent = "Loading verification totals…";
+  try {
+    const stats = await api("/api/stats");
+    $("#report-verified-count").textContent = Number(stats.verified_parts || 0).toLocaleString();
+    $("#report-unverified-count").textContent = Number(stats.unverified_parts || 0).toLocaleString();
+    status.textContent = `${Number(stats.parts || 0).toLocaleString()} inventory records`;
+  } catch (error) {
+    status.textContent = `Could not load report totals: ${error.message}`;
+  }
+}
+
 function switchView(name) {
   $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === `view-${name}`));
   if (name === "inventory") loadParts($("#search").value);
+  if (name === "reports") loadVerificationSummary();
   if (name === "studio") populateStudioSelect();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }

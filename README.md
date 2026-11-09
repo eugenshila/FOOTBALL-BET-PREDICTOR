@@ -278,8 +278,10 @@ required, the importer maps common headers itself:
 ```
 
 In the UI: **Inventory → ⇪ Import CSV** runs the dry run first, shows what would
-happen, and only writes when you press *Apply import*. **⇩ Export** downloads the
-current inventory in the same shape, so it round-trips.
+happen, and only writes when you press *Apply import*. **⇩ CSV Export** downloads
+the current inventory in the same shape, so it round-trips. The **Reports** tab
+shows verified/unverified totals and downloads a workbook with separate
+**Verified** and **Not Verified** sheets.
 
 What it handles from real-world files:
 
@@ -309,6 +311,7 @@ What it handles from real-world files:
 | `GET` | `/api/cards/download/{file}` | Download a rendered PNG |
 | `POST` | `/api/inventory/import?dry_run=&update_existing=` | Import a CSV stock list |
 | `GET` | `/api/inventory.csv` | Export inventory as CSV |
+| `GET` | `/api/inventory-verification.xlsx` | Download verified and unverified inventory on separate Excel sheets |
 | `POST` | `/api/inventory/import?...&mark_verified=true` | Import and mark rows verified |
 | `GET` | `/api/scans` | Scan history |
 | `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info (health includes database dialect/version) |

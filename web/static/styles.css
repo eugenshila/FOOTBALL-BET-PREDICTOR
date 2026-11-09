@@ -112,6 +112,12 @@ body {
 main { padding: clamp(14px, 3vw, 28px) clamp(14px, 4vw, 40px) 80px; max-width: 1400px; margin: 0 auto; }
 .view { display: none; }
 .view.active { display: block; animation: fade .25s ease; }
+.report-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 22px 0 14px; }
+.report-count { display: flex; flex-direction: column; gap: 3px; padding: 16px 18px; border: 1px solid var(--edge); border-radius: 10px; background: var(--panel-2); }
+.report-count strong { font-family: var(--cond); font-size: 30px; line-height: 1.1; }
+.report-count span { color: var(--dim); font-size: 13px; }
+.report-count.verified strong { color: var(--green); }
+.report-count.unverified strong { color: var(--amber); }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 18px; }
