@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Verifix — Parts Inventory</title>
 <meta name="theme-color" content="#181a1e" />
-  <link rel="stylesheet" href="/static/styles.css?v=verifix-20261109-11" />
+  <link rel="stylesheet" href="/static/styles.css?v=verifix-20261109-13" />
 <link rel="preload" href="/assets/fonts/BarlowCondensed-Bold.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="preload" href="/assets/fonts/Barlow-Medium.ttf" as="font" type="font/ttf" crossorigin />
 </head>
@@ -100,6 +100,7 @@
           <button id="btn-new-part" class="btn">＋ New part</button>
           <button id="btn-import" class="btn ghost">⇪ Import stock</button>
           <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ CSV Export</a>
+          <a id="btn-export-pdf" class="btn ghost" href="/api/inventory.pdf" download>⇩ PDF with photos</a>
           <input id="csv-input" type="file" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
         </div>
       </div>
@@ -155,6 +156,11 @@
       <p id="report-summary-status" class="status" role="status"></p>
       <a id="btn-verification-export" class="btn primary" href="/api/inventory-verification.xlsx" download>Download Excel report</a>
       <p class="muted small">The workbook has separate Verified and Not Verified sheets and includes the part numbers, fitment, stock, and record details.</p>
+      <div class="report-pdf-export">
+        <h3 class="panel-title">Inventory catalogue</h3>
+        <p class="muted small">Download the current parts list as a PDF with attached photos, stock, fitment, and receipt dates.</p>
+        <a id="btn-inventory-pdf-report" class="btn ghost" href="/api/inventory.pdf" download>Download PDF with photos (.pdf)</a>
+      </div>
     </div>
   </section>
 
@@ -276,6 +282,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/static/app.js?v=verifix-20261109-11"></script>
+<script src="/static/app.js?v=verifix-20261109-13"></script>
 </body>
 </html>

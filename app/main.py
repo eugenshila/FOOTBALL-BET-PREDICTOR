@@ -11,6 +11,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from contextlib import asynccontextmanager
 
@@ -20,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, importers, links, shop_profile, storage, stock_files, vision
+from . import cards, db, importers, inventory_pdf, links, shop_profile, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -520,6 +521,17 @@ def export_parts() -> PlainTextResponse:
         csv_text,
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="inventory.csv"'},
+    )
+
+
+@app.get("/api/inventory.pdf")
+def export_inventory_pdf() -> Response:
+    pdf_bytes = inventory_pdf.build_inventory_pdf(db.list_parts(limit=100000))
+    filename = f"parts-inventory-{datetime.now(ZoneInfo('Africa/Nairobi')).strftime('%Y-%m-%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
