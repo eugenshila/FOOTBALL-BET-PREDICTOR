@@ -47,6 +47,8 @@ DB_PATH = Path(os.getenv("APP_DB_PATH", DATA_DIR / "inventory.db"))
 # Empty -> SQLite at DB_PATH. Set to postgresql://user:pass@host:5432/dbname
 # to run the same app against PostgreSQL.
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -69,6 +71,8 @@ class Settings:
     """
 
     database_url: str = field(default_factory=lambda: DATABASE_URL)
+    supabase_url: str = field(default_factory=lambda: SUPABASE_URL)
+    supabase_publishable_key: str = field(default_factory=lambda: SUPABASE_PUBLISHABLE_KEY)
     vision_provider: str = field(default_factory=lambda: os.getenv("VISION_PROVIDER", "auto").lower())
     vision_model: str = field(default_factory=lambda: os.getenv("VISION_MODEL", ""))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))

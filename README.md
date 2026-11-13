@@ -354,8 +354,8 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
    Google Lens links also require a publicly reachable photo.
 5. **Offline matching only knows your catalogue.** It cannot identify a part you have
    never photographed.
-6. **Single-user by default.** There is no authentication. Put it behind a login/
-   reverse proxy before exposing it beyond a trusted network.
+6. **Authentication uses Supabase Auth.** Configure `SUPABASE_URL` and
+   `SUPABASE_PUBLISHABLE_KEY` as described below.
 
 ---
 
@@ -375,3 +375,10 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 
 Code: MIT. Fonts: Barlow / Barlow Condensed under the SIL Open Font License
 (`assets/fonts/OFL.txt`).
+
+
+## Supabase Auth setup
+
+The connected Supabase project is configured through `SUPABASE_URL` and the publishable key in `.env.example`. Copy those values into `.env` (or set them as deployment environment variables). Publishable keys are safe for this client integration; never use a Supabase secret or `service_role` key here.
+
+In Supabase Dashboard → Authentication → URL Configuration, set the Site URL to your app origin and add that origin to Redirect URLs. Enable email/password sign-in and decide whether email confirmation should be required. When confirmation is required, a new user must confirm their email before signing in. Use HTTPS in production. The app stores sessions in HTTP-only cookies, refreshes them, and protects the app, API, and private media routes.

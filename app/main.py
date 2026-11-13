@@ -17,11 +17,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, importers, inventory_pdf, links, shop_profile, storage, stock_files, vision
+from . import auth, cards, db, importers, inventory_pdf, links, shop_profile, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -73,6 +73,8 @@ app = FastAPI(
     ),
 )
 
+app.include_router(auth.router)
+app.middleware("http")(auth.guard)
 # Preview hosts are proxied under *.e2b.app, so keep CORS permissive but explicit.
 app.add_middleware(
     CORSMiddleware,
@@ -93,6 +95,11 @@ app.mount("/media/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/media/exports", StaticFiles(directory=EXPORT_DIR), name="exports")
 
 
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def login_page() -> HTMLResponse:
+    return HTMLResponse((WEB_DIR / "login.html").read_text(encoding="utf-8"))
+
+
 @app.head("/", include_in_schema=False)
 def index_head() -> Response:
     """Health/uptime probes often use HEAD; answer it instead of 405."""
@@ -105,7 +112,9 @@ def health_head() -> Response:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
+def index(request: Request) -> HTMLResponse:
+    if not getattr(request.state, "auth_user", None):
+        return RedirectResponse("/login", status_code=303)
     index_path = WEB_DIR / "index.html"
     if not index_path.exists():
         return HTMLResponse("<h1>UI not installed</h1>", status_code=500)

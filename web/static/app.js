@@ -117,6 +117,7 @@ async function api(path, options = {}) {
     headers: options.body instanceof FormData ? {} : { "Content-Type": "application/json" },
     ...options,
   });
+  if (response.status === 401) { location.assign("/login"); throw new Error("Your session has expired. Please sign in again."); }
   if (response.status === 204) return null;
   const text = await response.text();
   let data = null;
@@ -175,9 +176,10 @@ function renderMarkdown(markdown) {
 /* ── boot ─────────────────────────────────────────────────── */
 async function boot() {
   try {
-    const [config, health, stats] = await Promise.all([
-      api("/api/config"), api("/api/health"), api("/api/stats"),
+    const [config, health, stats, session] = await Promise.all([
+      api("/api/config"), api("/api/health"), api("/api/stats"), api("/api/auth/session"),
     ]);
+    $("#auth-email").textContent = session.email || "";
     state.config = config;
     populateShopSettings(config);
     renderSocialLinks($("#studio-social-links"), config.social_links);
@@ -977,4 +979,7 @@ function wireUi() {
 
 wireDropzone();
 wireUi();
+$("#btn-signout").addEventListener("click", async () => {
+  try { await fetch("/api/auth/signout", { method: "POST" }); } finally { location.assign("/login"); }
+});
 boot();
