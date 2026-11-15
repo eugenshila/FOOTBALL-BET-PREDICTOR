@@ -7,8 +7,10 @@ or wired to a real multimodal model in production.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 def _load_dotenv(path: Path) -> None:
     """Load KEY=VALUE pairs from .env without overriding real environment vars.
@@ -44,9 +46,80 @@ UPLOAD_DIR = Path(os.getenv("APP_UPLOAD_DIR", BASE_DIR / "uploads"))
 EXPORT_DIR = Path(os.getenv("APP_EXPORT_DIR", BASE_DIR / "exports"))
 WEB_DIR = BASE_DIR / "web"
 DB_PATH = Path(os.getenv("APP_DB_PATH", DATA_DIR / "inventory.db"))
-# Empty -> SQLite at DB_PATH. Set to postgresql://user:pass@host:5432/dbname
-# to run the same app against PostgreSQL.
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+
+# ── Database engine selection ──────────────────────────────────────────────
+# PostgreSQL is the default, so a shop deployment never quietly ends up on a
+# local file. SQLite remains a first-class fallback you opt into explicitly.
+#
+#   DATABASE_URL   full DSN; wins over everything when it is set
+#                  postgresql://user:pass@localhost:5432/partsid
+#                  sqlite:///./data/inventory.db
+#   DB_ENGINE      postgres (default) | sqlite
+#   POSTGRES_HOST  localhost      POSTGRES_PORT      5432
+#   POSTGRES_DB    partsid        POSTGRES_USER      partsid_user
+#   POSTGRES_PASSWORD             leave empty to use PGPASSWORD / ~/.pgpass
+DEFAULT_DB_ENGINE = "postgres"
+_POSTGRES_DEFAULTS = {
+    "POSTGRES_HOST": "localhost",
+    "POSTGRES_PORT": "5432",
+    "POSTGRES_DB": "partsid",
+    "POSTGRES_USER": "partsid_user",
+}
+_POSTGRES_ALIASES = {"postgres", "postgresql", "psql", "pg"}
+_SQLITE_ALIASES = {"sqlite", "sqlite3"}
+
+
+def sqlite_dsn(path: Path | str | None = None) -> str:
+    """DSN for the file-backed database used by ``DB_ENGINE=sqlite`` and tests."""
+    return f"sqlite:///{path or DB_PATH}"
+
+
+def postgres_dsn(environ: Mapping[str, str] | None = None) -> str:
+    """Build a DSN from POSTGRES_* variables.
+
+    The password is omitted when it is not set, so libpq can fall back to
+    ``PGPASSWORD`` or ``~/.pgpass`` instead of forcing it into a file.
+    """
+    env = os.environ if environ is None else environ
+
+    def value(key: str) -> str:
+        return (env.get(key) or _POSTGRES_DEFAULTS[key]).strip()
+
+    host = value("POSTGRES_HOST")
+    port = value("POSTGRES_PORT")
+    if not port.isdigit():
+        port = _POSTGRES_DEFAULTS["POSTGRES_PORT"]
+    database = value("POSTGRES_DB")
+    user = quote(value("POSTGRES_USER"), safe="")
+    password = (env.get("POSTGRES_PASSWORD") or "").strip()
+    credentials = f"{user}:{quote(password, safe='')}" if password else user
+    return f"postgresql://{credentials}@{host}:{port}/{database}"
+
+
+def resolve_database(environ: Mapping[str, str] | None = None) -> tuple[str, str]:
+    """Return ``(dsn, source)`` for the configured engine.
+
+    ``source`` is what diagnostics print next to the masked DSN, so an operator
+    can see *why* the app picked that database.
+    """
+    env = os.environ if environ is None else environ
+    explicit = (env.get("DATABASE_URL") or "").strip()
+    if explicit:
+        return explicit, "DATABASE_URL"
+
+    engine = (env.get("DB_ENGINE") or DEFAULT_DB_ENGINE).strip().lower()
+    if engine in _SQLITE_ALIASES:
+        return sqlite_dsn(), "DB_ENGINE=sqlite"
+    if engine in _POSTGRES_ALIASES:
+        return postgres_dsn(env), "DB_ENGINE=postgres"
+    # Unknown engine: keep it in the DSN so storage raises an explanatory error
+    # naming the offending value instead of silently picking something.
+    return f"{engine}://", f"DB_ENGINE={engine}"
+
+
+DATABASE_URL, DATABASE_SOURCE = resolve_database(os.environ)
+DATABASE_ENGINE = (os.getenv("DB_ENGINE") or DEFAULT_DB_ENGINE).strip().lower()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 
@@ -71,6 +144,8 @@ class Settings:
     """
 
     database_url: str = field(default_factory=lambda: DATABASE_URL)
+    database_source: str = field(default_factory=lambda: DATABASE_SOURCE)
+    database_engine: str = field(default_factory=lambda: DATABASE_ENGINE)
     supabase_url: str = field(default_factory=lambda: SUPABASE_URL)
     supabase_publishable_key: str = field(default_factory=lambda: SUPABASE_PUBLISHABLE_KEY)
     vision_provider: str = field(default_factory=lambda: os.getenv("VISION_PROVIDER", "auto").lower())

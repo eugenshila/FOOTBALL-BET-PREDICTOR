@@ -42,13 +42,74 @@ def test_sqlite_path_extraction():
     assert str(storage.sqlite_path_of("sqlite:///./data/x.db")) == "data/x.db"
 
 
-def test_default_is_sqlite_when_no_url_is_configured(monkeypatch):
-    """With DATABASE_URL unset the app must still run out of the box."""
+# ── engine selection (DB_ENGINE / DATABASE_URL) ───────────────────────────
+def test_default_engine_is_postgres():
+    """A shop deployment must never quietly land on a local file."""
+    from app.config import resolve_database
+
+    dsn, source = resolve_database({})
+    assert dsn.startswith("postgresql://")
+    assert dsn.endswith("@localhost:5432/partsid")
+    assert source == "DB_ENGINE=postgres"
+
+
+def test_sqlite_is_an_explicit_opt_in():
+    from app.config import DB_PATH, resolve_database
+
+    dsn, source = resolve_database({"DB_ENGINE": "sqlite"})
+    assert dsn == f"sqlite:///{DB_PATH}"
+    assert source == "DB_ENGINE=sqlite"
+
+
+def test_database_url_beats_db_engine():
+    from app.config import resolve_database
+
+    dsn, source = resolve_database(
+        {"DB_ENGINE": "sqlite", "DATABASE_URL": "postgresql://u@h/db"}
+    )
+    assert dsn == "postgresql://u@h/db"
+    assert source == "DATABASE_URL"
+
+
+def test_postgres_components_build_the_dsn():
+    from app.config import resolve_database
+
+    dsn, _ = resolve_database(
+        {
+            "POSTGRES_HOST": "db.local",
+            "POSTGRES_PORT": "6543",
+            "POSTGRES_DB": "shop",
+            "POSTGRES_USER": "till",
+            "POSTGRES_PASSWORD": "p@ss word",
+        }
+    )
+    assert dsn == "postgresql://till:p%40ss%20word@db.local:6543/shop"
+
+
+def test_password_may_be_left_to_pgpass():
+    from app.config import resolve_database
+
+    dsn, _ = resolve_database({"POSTGRES_USER": "till"})
+    assert dsn == "postgresql://till@localhost:5432/partsid"
+
+
+def test_unknown_engine_is_rejected_with_a_hint():
+    from app.config import resolve_database
+
+    dsn, source = resolve_database({"DB_ENGINE": "mysql"})
+    assert source == "DB_ENGINE=mysql"
+    with pytest.raises(storage.StorageError) as excinfo:
+        storage.dialect_of(dsn)
+    assert "DB_ENGINE" in str(excinfo.value)
+
+
+def test_no_database_configured_is_explained(monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "database_url", "")
-    assert storage.resolve_dsn("").startswith("sqlite")
-    assert storage.dialect_of(storage.resolve_dsn("")) == storage.SQLITE
+    with pytest.raises(storage.StorageError) as excinfo:
+        storage.resolve_dsn("")
+    assert "DB_ENGINE=sqlite" in str(excinfo.value)
 
 
 def test_explicit_dsn_wins_over_the_environment(monkeypatch):

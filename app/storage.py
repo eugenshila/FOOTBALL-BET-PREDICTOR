@@ -1,13 +1,15 @@
-"""Database abstraction: SQLite (zero setup, default) or PostgreSQL.
+"""Database abstraction: PostgreSQL (default) or SQLite (explicit fallback).
 
-The shop deployment uses PostgreSQL; tests and quick trials use SQLite. Both go
-through the same tiny adapter so the repository code in :mod:`app.db` never
-branches on dialect.
+PostgreSQL is what the shop runs on; SQLite stays available for trials and for
+the test suite. Both go through the same tiny adapter so the repository code in
+:mod:`app.db` never branches on dialect.
 
-Set ``DATABASE_URL`` to switch engines::
+Pick the engine with ``DB_ENGINE`` (``postgres`` is the default) or override the
+whole DSN with ``DATABASE_URL``::
 
-    postgresql://partsid:secret@localhost:5432/partsid
-    sqlite:///./data/inventory.db          # explicit, but also the default
+    DB_ENGINE=sqlite                       # -> sqlite:///./data/inventory.db
+    DATABASE_URL=sqlite:///./data/x.db     # same thing, stated outright
+    DATABASE_URL=postgresql://partsid:secret@localhost:5432/partsid
 
 Differences handled here, and nowhere else:
   * ``?`` placeholders  ->  ``%s`` for Postgres
@@ -27,7 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .config import DB_PATH, settings
+from .config import settings
 
 SQLITE = "sqlite"
 POSTGRES = "postgres"
@@ -129,10 +131,14 @@ class StorageError(RuntimeError):
 
 # ── dialect helpers ───────────────────────────────────────────────────────
 def resolve_dsn(database_url: str = "") -> str:
-    """Effective DSN: explicit argument, then settings, then the SQLite default."""
+    """Effective DSN: explicit argument, then the configured engine."""
     dsn = (database_url or settings.database_url or "").strip()
-    if not dsn:
-        return f"sqlite:///{DB_PATH}"
+    if not dsn:  # only reachable if settings were tampered with
+        raise StorageError(
+            "No database configured. Set DATABASE_URL=postgresql://"
+            "user:pass@localhost:5432/partsid, or DB_ENGINE=sqlite for a "
+            "zero-setup local file."
+        )
     return dsn
 
 
@@ -143,8 +149,9 @@ def dialect_of(dsn: str) -> str:
     if lowered.startswith("sqlite"):
         return SQLITE
     raise StorageError(
-        f"Unsupported DATABASE_URL scheme in {mask_dsn(dsn)!r}. "
-        "Use postgresql://... or sqlite:///path/to/file.db"
+        f"Unsupported database URL {mask_dsn(dsn)!r}. "
+        "Use DATABASE_URL=postgresql://user:pass@localhost:5432/partsid, "
+        "DATABASE_URL=sqlite:///path/to/file.db, or DB_ENGINE=sqlite"
     )
 
 
@@ -254,7 +261,7 @@ def _require_psycopg():
         raise StorageError(
             "PostgreSQL support needs psycopg. Install it with:\n"
             '    pip install "psycopg[binary]"\n'
-            "or switch back to SQLite by unsetting DATABASE_URL."
+            "or run without a database server by setting DB_ENGINE=sqlite."
         ) from exc
     return psycopg, dict_row
 
@@ -400,7 +407,7 @@ def describe(dsn: str = "") -> dict[str, Any]:
         return {
             "dialect": "unknown",
             "dsn": mask_dsn(str(dsn or settings.database_url or "")),
-            "source": "DATABASE_URL",
+            "source": settings.database_source,
             "connected": False,
             "error": str(exc).splitlines()[0],
         }
@@ -408,7 +415,7 @@ def describe(dsn: str = "") -> dict[str, Any]:
     info: dict[str, Any] = {
         "dialect": dialect,
         "dsn": mask_dsn(effective),
-        "source": "DATABASE_URL" if (settings.database_url and not dsn) else "default",
+        "source": settings.database_source if not dsn else "explicit",
     }
     try:
         info["version"] = server_version(effective)

@@ -124,8 +124,10 @@ def test_apply_creates_parts(client):
 
 
 def test_reimport_skips_existing_oem(client):
+    # update_existing=false is the "report duplicates" path; the default merges
+    # the imported quantities into the existing record instead.
     body = client.post(
-        "/api/inventory/import?dry_run=false",
+        "/api/inventory/import?dry_run=false&update_existing=false",
         files={"file": ("stock.csv", io.BytesIO(CSV_BASIC.encode()), "text/csv")},
     ).json()
     assert body["created"] == 0
@@ -184,7 +186,7 @@ def test_export_round_trips(client):
 def test_exported_csv_can_be_reimported(client):
     text = client.get("/api/inventory.csv").text
     body = client.post(
-        "/api/inventory/import?dry_run=true",
+        "/api/inventory/import?dry_run=true&update_existing=false",
         files={"file": ("round.csv", io.BytesIO(text.encode()), "text/csv")},
     ).json()
     assert body["errors"] == 0
@@ -222,7 +224,7 @@ def test_row_without_part_number_does_not_duplicate_on_reimport(client):
         files={"file": ("a.csv", io.BytesIO(text.encode()), "text/csv")},
     ).json()
     second = client.post(
-        "/api/inventory/import?dry_run=false",
+        "/api/inventory/import?dry_run=false&update_existing=false",
         files={"file": ("a.csv", io.BytesIO(text.encode()), "text/csv")},
     ).json()
     assert first["created"] == 1

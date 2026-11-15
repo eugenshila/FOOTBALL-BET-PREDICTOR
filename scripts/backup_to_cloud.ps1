@@ -29,8 +29,28 @@ foreach ($rawLine in Get-Content -LiteralPath $envFile) {
     if ($key -and -not (Test-Path "Env:$key")) { Set-Item -Path "Env:$key" -Value $value }
 }
 
+# The app can be configured with DATABASE_URL or with DB_ENGINE + POSTGRES_*.
+# Build the equivalent DSN from the parts when only the parts are set.
+if (-not $env:DATABASE_URL -and $env:DB_ENGINE -and $env:DB_ENGINE -notin @("postgres", "postgresql")) {
+    throw "DB_ENGINE=$($env:DB_ENGINE) is not PostgreSQL. Cloud backups need the PostgreSQL engine."
+}
+if (-not $env:DATABASE_URL -and -not $env:DB_ENGINE) {
+    # PostgreSQL is the app default; keep backups working without extra config.
+    $env:DB_ENGINE = "postgres"
+}
+if (-not $env:DATABASE_URL -and $env:DB_ENGINE -in @("postgres", "postgresql")) {
+    $pgHost = if ($env:POSTGRES_HOST) { $env:POSTGRES_HOST } else { "localhost" }
+    $pgPort = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { "5432" }
+    $pgDb = if ($env:POSTGRES_DB) { $env:POSTGRES_DB } else { "partsid" }
+    $pgUser = if ($env:POSTGRES_USER) { $env:POSTGRES_USER } else { "partsid_user" }
+    $credentials = [Uri]::EscapeDataString($pgUser)
+    if ($env:POSTGRES_PASSWORD) {
+        $credentials = "$credentials:$([Uri]::EscapeDataString($env:POSTGRES_PASSWORD))"
+    }
+    $env:DATABASE_URL = "postgresql://$credentials@$($pgHost):$($pgPort)/$($pgDb)"
+}
 if (-not $env:DATABASE_URL -or $env:DATABASE_URL -notmatch '^postgres(ql)?://') {
-    throw "DATABASE_URL must point to the local PostgreSQL database before backups can run."
+    throw "Database is not PostgreSQL. Set DATABASE_URL (or DB_ENGINE=postgres + POSTGRES_*) before backups can run."
 }
 if (-not $env:CLOUD_BACKUP_BUCKET) { throw "Set CLOUD_BACKUP_BUCKET in .env before enabling scheduled backups." }
 if (-not $env:AWS_ACCESS_KEY_ID -or -not $env:AWS_SECRET_ACCESS_KEY) {

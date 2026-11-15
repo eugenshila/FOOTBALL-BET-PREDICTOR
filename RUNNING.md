@@ -31,8 +31,7 @@ cd C:\path\to\FOOTBALL-BET-PREDICTOR
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install -r requirements-postgres.txt    # only if you will use PostgreSQL
+pip install -r requirements.txt             # includes psycopg, the Postgres driver
 ```
 
 > If PowerShell blocks the activate script, run once:
@@ -77,25 +76,37 @@ the default schema). Without them you get `permission denied for schema public`.
 ## 3. Point the app at your database (once)
 
 Create a file named `.env` in the project root (copy `.env.example` and edit it).
-The two lines that matter:
+PostgreSQL is the default engine, so the lines that matter are:
 
 ```ini
-DATABASE_URL=postgresql://partsid_user:change-this-password@localhost:5432/partsid
+DB_ENGINE=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=partsid
+POSTGRES_USER=partsid_user
+POSTGRES_PASSWORD=change-this-password
 GEMINI_API_KEY=
 ```
 
+- One line does the same job if you prefer a DSN; it overrides the `POSTGRES_*`
+  values above:
+  `DATABASE_URL=postgresql://partsid_user:change-this-password@localhost:5432/partsid`
 - If your password contains `@ : / ?` characters, URL-encode them
-  (`@` → `%40`), or the URL will be parsed wrongly.
+  (`@` → `%40`), or the URL will be parsed wrongly. With `POSTGRES_PASSWORD`
+  the encoding is done for you.
+- Leave `POSTGRES_PASSWORD` empty to source the password from `PGPASSWORD` or
+  `%APPDATA%\postgresql\pgpass.conf` instead of storing it in `.env`.
 - Leave `GEMINI_API_KEY` empty for now — the app still works, using the offline
   matcher. See step 6 to turn on real identification.
 - Keep `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from `.env.example`. They are
   what the login page uses; with them blank, `/login` loads but signing in returns
   `503 Supabase Auth is not configured`.
 
-The app reads `.env` automatically if you run it through the helper below, or you
-can set the variable yourself:
+The app reads `.env` automatically on import, or you can set the variables yourself:
 
 ```powershell
+$env:POSTGRES_PASSWORD = "change-this-password"
+# or, as one line:
 $env:DATABASE_URL = "postgresql://partsid_user:change-this-password@localhost:5432/partsid"
 ```
 
@@ -289,7 +300,8 @@ ends up in the repository.
 | `database "partsid" does not exist` | Step 2 was skipped — run `CREATE DATABASE partsid;` |
 | `permission denied for schema public` | Run the two `GRANT` lines (including `\c partsid` first) from step 2 |
 | `PostgreSQL support needs psycopg` | `pip install -r requirements-postgres.txt` |
-| `Unsupported DATABASE_URL scheme` | Typo in the URL — it must start `postgresql://` |
+| `Unsupported database URL ...` | `DB_ENGINE` must be `postgres` or `sqlite`; a DSN must start `postgresql://` or `sqlite://` |
+| `DB_ENGINE=mysql`-style typo | Any other engine is refused instead of silently ignored |
 | `[Errno 10048] / address already in use` when starting | Port 8000 is taken. Either stop the other process, or run on another port: `--port 8001` |
 | Badge says *Offline reference matcher* | No vision key. Expected until step 6 |
 | `check-providers` shows `FAIL ... 400` | The key is valid but the model/region rejects search grounding. Try `GROUNDING_MODEL=gemini-2.0-flash`, or set `SEARCH_GROUNDING=false` to use plain vision |
@@ -300,10 +312,28 @@ ends up in the repository.
 
 ## Prefer no database server at all?
 
-Remove `DATABASE_URL` (or leave it empty) and the app uses SQLite at
-`data/inventory.db`. Zero setup, same features, single user. Good for trying the
-app; PostgreSQL is the better choice for a real shop (concurrent tills,
-backups, remote access).
+Set one variable and the app uses SQLite at `data/inventory.db` instead — same
+features, same code, single user:
+
+```ini
+# .env
+DB_ENGINE=sqlite
+```
+
+or run a single command without touching `.env`:
+
+```powershell
+$env:DB_ENGINE = "sqlite"; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+(`make run-sqlite` does the same on macOS/Linux.) Good for trying the app;
+PostgreSQL is the better choice for a real shop (concurrent tills, backups,
+remote access).
+
+**Nothing falls back on its own.** If PostgreSQL is configured and not reachable,
+the app refuses to start and says so, rather than quietly writing to a different
+database than the one you think you are using. `check-db` and `/api/health` both
+print the masked DSN plus which variable chose it.
 
 ---
 

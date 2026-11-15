@@ -1,3 +1,5 @@
-# PostgreSQL support (optional - the app runs on SQLite without this).
-# Use the [binary] extra so Windows/macOS need no compiler.
+# PostgreSQL support (optional).
+# Now included by requirements.txt, because PostgreSQL is the default engine.
+# Kept so older docs and setups that run `pip install -r requirements-postgres.txt`
+# keep working. Use the [binary] extra so Windows/macOS need no compiler.
 psycopg[binary]>=3.1

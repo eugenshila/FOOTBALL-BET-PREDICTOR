@@ -27,12 +27,22 @@ The report the engine prints follows the required contract exactly:
 
 ## Quick start
 
+PostgreSQL is the default engine. Create the database and user once, then start:
+
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 cp .env.example .env                                # Windows: copy .env.example .env
+psql -U postgres -f scripts/setup_postgres.sql      # creates partsid + partsid_user
+# .env: set POSTGRES_PASSWORD (and POSTGRES_USER/POSTGRES_DB if you changed them)
+./.venv/bin/python -m app.cli check-db              # verify the connection first
 ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+Use `DATABASE_URL=postgresql://user:pass@host:5432/dbname` instead of the
+`POSTGRES_*` variables if you prefer one line; it wins over everything else.
+The masked DSN and which variable it came from are printed by `check-db` and on
+`/api/health`, so there is never any doubt which database is live.
 
 Open <http://localhost:8000>. On first start the app creates its schema and seeds a
 **4-part demonstration catalogue** so every screen is usable immediately.
@@ -51,20 +61,24 @@ No vision API key is required to boot — with none configured the app falls bac
 offline reference matcher. Set `GEMINI_API_KEY` in `.env` for real identification with
 Google Search citations; see [Vision providers](#vision-providers).
 
-**Windows + PostgreSQL users: follow [RUNNING.md](RUNNING.md)** — it covers creating
-the database, the `DATABASE_URL` line, and the usual connection errors. The short
-version:
+**No database server? Opt into the file-backed engine** — nothing else changes:
 
-```powershell
-pip install -r requirements-postgres.txt            # psycopg
-# .env:  DATABASE_URL=postgresql://partsid_user:pw@localhost:5432/partsid
-python -m app.cli check-db                          # verify before starting
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```bash
+DB_ENGINE=sqlite ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# or set DB_ENGINE=sqlite in .env / run `make run-sqlite`
 ```
 
+That keeps everything in `data/inventory.db`. It is the right choice for a trial or a
+single-user laptop, not for a counter with several tills. The two engines are never
+mixed automatically: the app always uses the one you configured and fails loudly if it
+cannot reach it.
+
+**Windows users: follow [RUNNING.md](RUNNING.md)** — it covers creating the database,
+the `.env` lines, and the usual connection errors.
+
 > **Ports:** the app listens on **8000**; PostgreSQL stays on its default **5432**.
-> The app connects to Postgres through `DATABASE_URL`, so nothing needs to move
-> ports and 5432 is not a web page.
+> The app connects to Postgres through `DATABASE_URL`/`POSTGRES_*`, so nothing needs
+> to move ports and 5432 is not a web page.
 
 ### CLI
 
@@ -98,13 +112,15 @@ npm install jsdom && node scripts/ui_smoke.cjs   # server on :8000
 API tests:
 
 ```bash
-./.venv/bin/python -m pytest tests -q                       # SQLite
+./.venv/bin/python -m pytest tests -q                       # SQLite (no server needed)
 TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test \
   ./.venv/bin/python -m pytest tests -q                     # the same suite on Postgres
 ```
 
-The full suite passes on both engines (95 tests on PostgreSQL, where a few
-engine-specific tests also run).
+The suite runs on either engine; on PostgreSQL a few engine-specific tests also run.
+The API tests assume an authenticated user, so they replace the Supabase session
+check with a stub (see `tests/conftest.py`) — nothing else in the auth layer is
+touched.
 
 ### Importing stock lists in the web app
 
@@ -245,7 +261,7 @@ web/                     Vanilla JS + CSS operator UI (no build step)
 app/
   main.py                FastAPI routes: identify · inventory · cards · scans
   models.py              Pydantic schemas (report, part, fitment, card, stock movement)
-  db.py                  SQLite persistence: parts, movements, scans
+  db.py                  Portable persistence: parts, movements, scans
   catalog.py             Catalogue loading, seeding, report→stock matching
   report.py              Three-section markdown contract
   cards.py               Pillow card renderer (story/square/wide/bin_label)
@@ -262,8 +278,8 @@ assets/fonts/            Barlow / Barlow Condensed (SIL OFL)
 tests/                   API + pipeline tests
 ```
 
-**Storage.** Works on **SQLite** (default, zero setup, WAL) or **PostgreSQL** — set
-`DATABASE_URL` and the same code runs on either. `app/storage.py` is the only place
+**Storage.** Runs on **PostgreSQL** (default) or **SQLite** (explicit
+`DB_ENGINE=sqlite`, zero setup, WAL) — the same code runs on either. `app/storage.py` is the only place
 that knows the difference: it translates `?` → `%s`, maps `AUTOINCREMENT` to identity
 columns, turns `lastrowid` into `INSERT … RETURNING id`, picks `ILIKE` over `LIKE`,
 and keeps a small connection pool for Postgres. The repository layer (`app/db.py`)
@@ -340,7 +356,11 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` | *(empty = SQLite)* | `postgresql://user:pw@localhost:5432/partsid` to use PostgreSQL |
+| `DB_ENGINE` | `postgres` | `postgres` or `sqlite` — which engine to use |
+| `DATABASE_URL` | *(empty)* | Full DSN, overrides `DB_ENGINE`/`POSTGRES_*` |
+| `POSTGRES_HOST` / `_PORT` | `localhost` / `5432` | Where the server listens |
+| `POSTGRES_DB` / `_USER` | `partsid` / `partsid_user` | Database and role |
+| `POSTGRES_PASSWORD` | *(empty)* | Leave empty to use `PGPASSWORD` or `~/.pgpass` |
 | `VISION_PROVIDER` | `auto` | `auto`/`openai`/`gemini`/`anthropic`/`ollama`/`offline` |
 | `SHOP_NAME` | `SHILA AUTO PARTS` | Wordmark on every card |
 | `WHATSAPP_NUMBER` | `+254 700 000 000` | Order CTA on cards and captions |

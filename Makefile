@@ -1,15 +1,20 @@
-.PHONY: install install-pg run test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export clean
+.PHONY: install install-pg run run-sqlite test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export clean
 
 install:
 	python3 -m venv .venv
 	./.venv/bin/pip install -r requirements.txt
 
-# only needed when DATABASE_URL points at PostgreSQL
+# psycopg is already in requirements.txt; keep this if you installed before that
 install-pg:
 	./.venv/bin/pip install -r requirements-postgres.txt
 
+# PostgreSQL is the default engine - .env supplies DATABASE_URL or POSTGRES_*
 run:
 	./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Same app on the file-backed engine, no database server needed
+run-sqlite:
+	DB_ENGINE=sqlite ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # The same suite runs on either engine. PostgreSQL:
 #   make test-pg TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test

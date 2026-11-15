@@ -712,9 +712,9 @@ def _explain_database_problem(message: str) -> None:
         "│\n"
         "│ Fix it with one of these:\n"
         "│   · start PostgreSQL (Windows: Start-Service postgresql-x64-18)\n"
-        "│   · check DATABASE_URL in .env - see RUNNING.md step 3\n"
-        '│   · missing driver:  pip install -r requirements-postgres.txt\n'
-        "│   · no database server? unset DATABASE_URL to use SQLite instead\n"
+        "│   · check DATABASE_URL / POSTGRES_* in .env - see RUNNING.md step 3\n"
+        "│   · missing driver:  pip install -r requirements.txt\n"
+        "│   · no database server? set DB_ENGINE=sqlite in .env for a local file\n"
         "│\n"
         "│ Diagnose:  python -m app.cli check-db\n"
         "└────────────────────────────────────────────────────────────────────\n"

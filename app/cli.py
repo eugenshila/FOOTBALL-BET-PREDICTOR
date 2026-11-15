@@ -163,17 +163,18 @@ def cmd_check_db(args: argparse.Namespace) -> int:
         print(f"status   : FAILED — {error}")
         print("\nHints:")
         lowered = error.lower()
-        if "scheme" in lowered:
-            print("  · DATABASE_URL must start with postgresql:// (or leave it empty for SQLite)")
+        if "unsupported" in lowered or "scheme" in lowered:
+            print("  · DB_ENGINE must be postgres or sqlite")
+            print("  · DATABASE_URL must start with postgresql:// or sqlite://")
             print("    example: postgresql://partsid_user:pw@localhost:5432/partsid")
         elif "psycopg" in lowered:
-            print("  · install the driver:  pip install -r requirements-postgres.txt")
+            print("  · install the driver:  pip install -r requirements.txt")
         else:
             print("  · is PostgreSQL running?  (Windows: Services -> postgresql-x64; "
                   "macOS: brew services list; Linux: systemctl status postgresql)")
             print("  · did you create the database and user?  see RUNNING.md step 2")
             print("  · is the port right?  PostgreSQL defaults to 5432, not 8000")
-        print("  · unset DATABASE_URL to fall back to SQLite")
+            print("  · no server? set DB_ENGINE=sqlite in .env and rerun")
         return 1
 
     print(f"server   : {info.get('version', 'unknown')}")

@@ -15,19 +15,41 @@ os.environ.setdefault("APP_DB_PATH", str(_TMP / "test.db"))
 os.environ.setdefault("APP_UPLOAD_DIR", str(_TMP / "uploads"))
 os.environ.setdefault("APP_EXPORT_DIR", str(_TMP / "exports"))
 
-# Run the whole suite against PostgreSQL by exporting TEST_DATABASE_URL, e.g.
+# The app defaults to PostgreSQL; the suite runs on SQLite unless a server is
+# offered explicitly, so `pytest` needs no database server installed.
 #   TEST_DATABASE_URL=postgresql://postgres@localhost:5432/partsid_test pytest
 if os.getenv("TEST_DATABASE_URL"):
     os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+else:
+    os.environ.setdefault("DB_ENGINE", "sqlite")
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TMP / 'test.db'}")
 os.environ["VISION_PROVIDER"] = "offline"  # never hit a network provider in tests
 os.environ["WHATSAPP_NUMBER"] = "+254 700 000 000"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import db  # noqa: E402
+from app import auth, db  # noqa: E402
 from app.config import DB_PATH  # noqa: E402
 from app.main import app  # noqa: E402
+from starlette.middleware import Middleware  # noqa: E402
+from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
+
+
+# The app sits behind Supabase Auth, which needs the network. Tests drive the
+# API as an already-signed-in user, so the session check is replaced here and
+# nothing else in the auth layer changes.
+async def _assume_signed_in(request, call_next):
+    request.state.auth_user = {"email": "tests@example.com", "id": "test-user"}
+    return await call_next(request)
+
+
+app.user_middleware = [
+    Middleware(BaseHTTPMiddleware, dispatch=_assume_signed_in)
+    if middleware.kwargs.get("dispatch") is auth.guard
+    else middleware
+    for middleware in app.user_middleware
+]
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "assets" / "seed"
 
