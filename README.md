@@ -30,13 +30,26 @@ The report the engine prints follows the required contract exactly:
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
+cp .env.example .env                                # Windows: copy .env.example .env
 ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Open <http://localhost:8000>. On first start the app creates its schema and seeds a
 **4-part demonstration catalogue** so every screen is usable immediately.
 
-No API key is required to boot — see [Vision providers](#vision-providers).
+The app is behind Supabase Auth, so the first request redirects to `/login`:
+
+1. `.env` must contain `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` — copying
+   `.env.example` already gives working values (see [Supabase Auth setup](#supabase-auth-setup)).
+   Without them, `/login` loads but every sign-in returns
+   `503 Supabase Auth is not configured`.
+2. On the login page click **Create account**, then sign in with that email/password.
+   If the Supabase project requires email confirmation, confirm the email first and
+   then sign in.
+
+No vision API key is required to boot — with none configured the app falls back to the
+offline reference matcher. Set `GEMINI_API_KEY` in `.env` for real identification with
+Google Search citations; see [Vision providers](#vision-providers).
 
 **Windows + PostgreSQL users: follow [RUNNING.md](RUNNING.md)** — it covers creating
 the database, the `DATABASE_URL` line, and the usual connection errors. The short

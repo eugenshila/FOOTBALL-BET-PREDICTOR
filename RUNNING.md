@@ -88,6 +88,9 @@ GEMINI_API_KEY=
   (`@` → `%40`), or the URL will be parsed wrongly.
 - Leave `GEMINI_API_KEY` empty for now — the app still works, using the offline
   matcher. See step 6 to turn on real identification.
+- Keep `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from `.env.example`. They are
+  what the login page uses; with them blank, `/login` loads but signing in returns
+  `503 Supabase Auth is not configured`.
 
 The app reads `.env` automatically if you run it through the helper below, or you
 can set the variable yourself:
@@ -128,6 +131,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Leave that window open. Then open <http://localhost:8000> in your browser.
+
+The first page you see is `/login`. Click **Create account** to register an
+email/password against the Supabase project from `.env`, then sign in. If that
+project requires email confirmation, confirm the email first — otherwise sign-in
+reports that the account is not confirmed yet. Sessions are stored in HTTP-only
+cookies, so you stay signed in across restarts.
 
 - `--host 0.0.0.0` makes it reachable from your phone on the same Wi-Fi
   (`http://<your-pc-ip>:8000`) — useful for testing the camera capture.
