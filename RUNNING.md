@@ -276,6 +276,62 @@ Other options:
 **Always back up before a replace:** `pg_dump -U partsid_user partsid > backup.sql`
 (or `python -m app.cli export-csv --out backup.csv` for a spreadsheet copy).
 
+---
+
+## 8b. Restoring a backup (getting your old stock back)
+
+Two kinds of file can be restored:
+
+| File | Made by | Restore with |
+|---|---|---|
+| `*.dump` (custom format, starts with `PGDMP`) | `pg_dump -Fc` — includes `backups/partsid_backup.dump` in this repo | `pg_restore` |
+| `*.sql` (plain text) | `pg_dump partsid > backup.sql` | `psql -f backup.sql` |
+
+The app never deletes or rewrites rows on startup — it only creates missing tables
+(`CREATE TABLE IF NOT EXISTS`). So a database that still holds your old stock is
+picked up as-is; restoring is only needed when the dump file is the only copy left.
+
+**Inspect the file first** (lists tables and data entries):
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\pg_restore.exe" -l .\backups\partsid_backup.dump
+```
+
+**Restore into a scratch database before touching `partsid`:**
+
+```powershell
+$env:PGPASSWORD = "change-this-password"
+$pg = "C:\Program Files\PostgreSQL\18\bin"
+
+& "$pg\psql.exe" -U postgres -d postgres -c "CREATE DATABASE partsid_restore"
+& "$pg\pg_restore.exe" --no-owner --no-privileges -d "postgresql://partsid_user:change-this-password@localhost:5432/partsid_restore" .\backups\partsid_backup.dump
+
+# prove the app reads it, without touching the live database
+$env:DATABASE_URL = "postgresql://partsid_user:change-this-password@localhost:5432/partsid_restore"
+python -m app.cli check-db
+python -m app.cli list
+```
+
+Happy with the numbers? Restore over the live database. `--clean --if-exists` drops
+the existing tables first, which is what avoids "relation parts already exists":
+
+```powershell
+Remove-Item Env:\DATABASE_URL
+& "$pg\pg_restore.exe" --no-owner --no-privileges --clean --if-exists -d "postgresql://partsid_user:change-this-password@localhost:5432/partsid" .\backups\partsid_backup.dump
+python -m app.cli check-db
+```
+
+Then start the app as usual. If the restore brought real stock with it, also set
+`SEED_DEMO_DATA=false` in `.env` so a later wipe does not re-seed demo parts.
+
+`sqlite:///` DSNs are not affected by any of this; `pg_restore` only ever talks to
+PostgreSQL.
+
+> **"unsupported version (1.16) in file header"** means the `pg_restore` you ran is
+> older than the `pg_dump` that wrote the file. Use the executable from your
+> PostgreSQL installation (`C:\Program Files\PostgreSQL\18\bin`), not one from an
+> older client or a bundled tool.
+
 ## 9. Where things live
 
 | Item | Location |
@@ -285,6 +341,7 @@ Other options:
 | Generated cards | `exports/` |
 | Settings | `.env` |
 | Demo catalogue | `data/catalog.json` |
+| Seed backup shipped with the repo | `backups/partsid_backup.dump` (restore: step 8b) |
 
 `uploads/`, `exports/` and the SQLite file are git-ignored — your shop data never
 ends up in the repository.
