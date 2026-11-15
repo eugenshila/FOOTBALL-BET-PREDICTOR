@@ -146,6 +146,11 @@ class Settings:
     database_url: str = field(default_factory=lambda: DATABASE_URL)
     database_source: str = field(default_factory=lambda: DATABASE_SOURCE)
     database_engine: str = field(default_factory=lambda: DATABASE_ENGINE)
+    # "supabase" (default) checks every request against Supabase Auth, which
+    # needs internet. "off" skips sign-in entirely for a single-machine shop.
+    auth_mode: str = field(
+        default_factory=lambda: (os.getenv("AUTH_MODE", "supabase") or "supabase").strip().lower()
+    )
     supabase_url: str = field(default_factory=lambda: SUPABASE_URL)
     supabase_publishable_key: str = field(default_factory=lambda: SUPABASE_PUBLISHABLE_KEY)
     vision_provider: str = field(default_factory=lambda: os.getenv("VISION_PROVIDER", "auto").lower())

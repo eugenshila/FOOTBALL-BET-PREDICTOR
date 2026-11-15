@@ -273,3 +273,85 @@ def test_jwt_expiry_parser_tolerates_junk():
     assert auth._jwt_expired("a.b.c") is False
     assert auth._jwt_expired(_jwt(-10)) is True
     assert auth._jwt_expired(_jwt(10)) is False
+
+
+# ── AUTH_MODE=off: a single machine, no sign-in service in the path ───────
+def test_off_mode_lets_every_request_through_without_the_network(monkeypatch):
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+    fake = FakeClient(raises=AssertionError("auth server must not be contacted"))
+    monkeypatch.setattr(auth.httpx, "AsyncClient", fake)
+
+    response = _guard({}, path="/api/parts")
+
+    assert response.status_code == 200
+    assert fake.calls == []
+
+
+def test_off_mode_marks_a_local_operator_on_the_request(monkeypatch):
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+
+    async def call_next(request):
+        return JSONResponse({"email": request.state.auth_user.get("email")})
+
+    request = _request("/", {})
+    response = asyncio.run(auth.guard(request, call_next))
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["email"] == "local@localhost"
+
+
+def test_off_mode_does_not_touch_stale_cookies(monkeypatch):
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+
+    response = _guard({auth.ACCESS_COOKIE: _jwt(-60)}, path="/")
+
+    assert response.status_code == 200
+    assert not response.headers.getlist("set-cookie")
+
+
+def test_off_mode_reports_an_authenticated_session(monkeypatch):
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+
+    assert auth.session(_request("/api/auth/session", {})) == {
+        "authenticated": True,
+        "email": None,
+        "mode": "off",
+    }
+
+
+def test_off_mode_refuses_password_endpoints(monkeypatch):
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+    credentials = auth.Credentials(email="shop@example.com", password="password123")
+
+    for endpoint in (auth.signin, auth.signup):
+        with pytest.raises(auth.HTTPException) as excinfo:
+            asyncio.run(endpoint(credentials, _request("/api/auth/signin", {})))
+        assert excinfo.value.status_code == 409
+        assert "AUTH_MODE" in excinfo.value.detail
+
+
+def test_auth_mode_aliases(monkeypatch):
+    for raw in ("off", "OFF", "none", "disabled", "false", "open"):
+        monkeypatch.setattr(auth.settings, "auth_mode", raw)
+        assert auth.auth_mode() == "off", raw
+    for raw in ("supabase", "on", "true", "yes", "", "garbage"):
+        monkeypatch.setattr(auth.settings, "auth_mode", raw)
+        assert auth.auth_mode() == "supabase", raw
+
+
+def test_health_and_login_route_follow_the_mode(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from app.main import app as real_app
+
+    monkeypatch.setattr(auth.settings, "auth_mode", "off")
+    with TestClient(real_app) as client:
+        assert client.get("/api/health").json()["auth"] == "off"
+        login = client.get("/login", follow_redirects=False)
+        assert login.status_code == 303
+        assert login.headers["location"] == "/"
+
+    monkeypatch.setattr(auth.settings, "auth_mode", "supabase")
+    with TestClient(real_app) as client:
+        assert client.get("/api/health").json()["auth"] == "supabase"
+        assert client.get("/login", follow_redirects=False).status_code == 200

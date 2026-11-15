@@ -15,6 +15,9 @@ from .config import settings
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+AUTH_OFF_ALIASES = {"off", "none", "disabled", "false", "open", "no"}
+AUTH_SUPABASE_ALIASES = {"supabase", "on", "true", "yes", "auth"}
+LOCAL_OPERATOR = {"id": "local", "email": "local@localhost", "local": True}
 ACCESS_COOKIE = "verifix_access_token"
 REFRESH_COOKIE = "verifix_refresh_token"
 REFRESH_MAX_AGE = 30 * 24 * 3600
@@ -32,6 +35,18 @@ class Credentials(BaseModel):
         if "@" not in value or value.startswith("@") or value.endswith("@"):
             raise ValueError("Enter a valid email address")
         return value
+
+
+def auth_mode() -> str:
+    """``off`` or ``supabase``. Unknown values fall back to the safe one."""
+    raw = (settings.auth_mode or "").strip().lower()
+    if raw in AUTH_OFF_ALIASES:
+        return "off"
+    return "supabase" if raw in AUTH_SUPABASE_ALIASES or not raw else "supabase"
+
+
+def auth_off() -> bool:
+    return auth_mode() == "off"
 
 
 def _url(path: str) -> str:
@@ -83,8 +98,17 @@ def clear_cookies(response: Response, request: Request | None = None) -> None:
         response.delete_cookie(name, path="/", httponly=True, samesite=samesite, secure=secure)
 
 
+def _refuse_when_off() -> None:
+    if auth_off():
+        raise HTTPException(
+            status_code=409,
+            detail="Sign-in is disabled (AUTH_MODE=off). Set AUTH_MODE=supabase in .env to require an account.",
+        )
+
+
 @router.post("/api/auth/signup")
 async def signup(payload: Credentials, request: Request) -> Response:
+    _refuse_when_off()
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             result = await client.post(_url("signup"), headers=_headers(), json={"email": payload.email.strip(), "password": payload.password})
@@ -103,6 +127,7 @@ async def signup(payload: Credentials, request: Request) -> Response:
 
 @router.post("/api/auth/signin")
 async def signin(payload: Credentials, request: Request) -> Response:
+    _refuse_when_off()
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             result = await client.post(_url("token?grant_type=password"), headers=_headers(), json={"email": str(payload.email), "password": payload.password})
@@ -119,7 +144,7 @@ async def signin(payload: Credentials, request: Request) -> Response:
 @router.post("/api/auth/signout")
 async def signout(request: Request) -> Response:
     token = request.cookies.get(ACCESS_COOKIE)
-    if token and settings.supabase_url and settings.supabase_publishable_key:
+    if token and not auth_off() and settings.supabase_url and settings.supabase_publishable_key:
         try:
             async with httpx.AsyncClient(timeout=8) as client:
                 await client.post(_url("logout"), headers=_headers(token))
@@ -132,8 +157,10 @@ async def signout(request: Request) -> Response:
 
 @router.get("/api/auth/session")
 def session(request: Request) -> dict[str, Any]:
+    if auth_off():
+        return {"authenticated": True, "email": None, "mode": "off"}
     user = getattr(request.state, "auth_user", None)
-    return {"authenticated": bool(user), "email": user.get("email") if user else None}
+    return {"authenticated": bool(user), "email": user.get("email") if user else None, "mode": "supabase"}
 
 
 # ── session resolution ─────────────────────────────────────────────────────
@@ -273,6 +300,10 @@ def _service_unavailable(request: Request, *, configured: bool = True) -> Respon
 
 async def guard(request: Request, call_next):
     path = request.url.path
+    if auth_off():
+        # Single-machine mode: no cookies, no Supabase round trip, no redirects.
+        request.state.auth_user = LOCAL_OPERATOR
+        return await call_next(request)
     public = (
         path == "/login"
         or path.startswith("/static/")

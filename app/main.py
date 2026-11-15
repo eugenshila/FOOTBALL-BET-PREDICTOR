@@ -54,6 +54,11 @@ async def lifespan(_app: FastAPI):
         _explain_database_problem(str(exc))
         raise
     log.info("Database ready (%s)", dialect)
+    if auth.auth_off():
+        log.warning(
+            "AUTH_MODE=off - sign-in is disabled. Anyone who can reach this port has "
+            "full access to the shop data. Use it only on a machine you control."
+        )
     if settings.seed_demo_data:
         added = seed_if_empty()
         if added:
@@ -96,7 +101,9 @@ app.mount("/media/exports", StaticFiles(directory=EXPORT_DIR), name="exports")
 
 
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page() -> HTMLResponse:
+def login_page() -> Response:
+    if auth.auth_off():
+        return RedirectResponse("/", status_code=303)
     return HTMLResponse((WEB_DIR / "login.html").read_text(encoding="utf-8"))
 
 
@@ -118,7 +125,12 @@ def index(request: Request) -> HTMLResponse:
     index_path = WEB_DIR / "index.html"
     if not index_path.exists():
         return HTMLResponse("<h1>UI not installed</h1>", status_code=500)
-    return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    html = index_path.read_text(encoding="utf-8")
+    if auth.auth_off():
+        html = html.replace(
+            "</head>", "<style>#btn-signout{display:none}</style></head>", 1
+        )
+    return HTMLResponse(html)
 
 
 @app.get("/api/health")
@@ -135,6 +147,7 @@ def health() -> dict:
         "whatsapp": settings.whatsapp_number,
         "currency": settings.currency,
         "require_verification": settings.require_verification,
+        "auth": auth.auth_mode(),
         "database": db.database_info(),
         "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

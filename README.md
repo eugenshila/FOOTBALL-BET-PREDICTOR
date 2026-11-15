@@ -369,6 +369,7 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 | `SEED_DEMO_DATA` | `true` | Seed the demo catalogue into an empty database |
 | `MAX_UPLOAD_MB` | `12` | Upload limit (images are downscaled to 1600 px) |
 | `AUTH_COOKIE_SAMESITE` | `lax` | `none` only when embedded in a cross-site iframe (forces Secure) |
+| `AUTH_MODE` | `supabase` | `supabase` checks every request against Supabase Auth; `off` disables sign-in for a single-machine shop |
 
 ---
 
@@ -410,6 +411,18 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 Code: MIT. Fonts: Barlow / Barlow Condensed under the SIL Open Font License
 (`assets/fonts/OFL.txt`).
 
+
+### Running without sign-in (one machine)
+
+`AUTH_MODE=off` in `.env` removes the sign-in service from the request path
+entirely: no cookies, no Supabase round trip, no redirect to `/login`. The app
+opens straight onto the dashboard, which also makes every page load noticeably
+faster. The sign-out button is hidden and `/api/health` reports `"auth": "off"`.
+
+Use it when the app runs on one laptop at one counter. It is **not** a security
+layer: anybody who can reach port 8000 has full access to the inventory, so keep
+`AUTH_MODE=supabase` (the default) for anything reachable from a network you do
+not control, and keep the default `--host 0.0.0.0` off in that case.
 
 ## Supabase Auth setup
 
