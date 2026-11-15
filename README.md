@@ -25,6 +25,10 @@ The report the engine prints follows the required contract exactly:
 
 ---
 
+> **Setting this machine up?** [START_HERE.md](START_HERE.md) has the exact
+> copy-paste commands: install, restore your old data, start, stop, back up, and
+> the fixes for the errors that actually happen.
+
 ## Quick start
 
 PostgreSQL is the default engine. Create the database and user once, then start:
