@@ -364,6 +364,7 @@ ends up in the repository.
 | `check-providers` shows `FAIL ... 400` | The key is valid but the model/region rejects search grounding. Try `GROUNDING_MODEL=gemini-2.0-flash`, or set `SEARCH_GROUNDING=false` to use plain vision |
 | "Reverse image search" button missing | Google Lens needs a *publicly reachable* photo, so it is hidden on `localhost`. Set `PUBLIC_BASE_URL=https://your-domain` (or use a tunnel) to enable it |
 | Everything is slow on first upload | First call loads the model / warms caches; later uploads are ~1–3 s |
+| Signed out on every click or after about an hour | Sessions renew from the 30-day refresh cookie. If it still happens: clear the site's cookies once, then check the clock on the PC matches real time, and that `.env` has the `SUPABASE_*` values (a 503 page now says so instead of pretending you were signed out). Embedded preview panes need `AUTH_COOKIE_SAMESITE=none` |
 
 ---
 

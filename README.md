@@ -368,6 +368,7 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 | `REQUIRE_PART_VERIFICATION` | `true` | Block cards for unverified records |
 | `SEED_DEMO_DATA` | `true` | Seed the demo catalogue into an empty database |
 | `MAX_UPLOAD_MB` | `12` | Upload limit (images are downscaled to 1600 px) |
+| `AUTH_COOKIE_SAMESITE` | `lax` | `none` only when embedded in a cross-site iframe (forces Secure) |
 
 ---
 

@@ -173,6 +173,12 @@ class Settings:
     whatsapp_number: str = field(default_factory=lambda: os.getenv("WHATSAPP_NUMBER", "+254 700 000 000"))
     currency: str = field(default_factory=lambda: os.getenv("CURRENCY", "KES"))
     location: str = field(default_factory=lambda: os.getenv("SHOP_LOCATION", "Nairobi, Kenya"))
+    # Cookie policy for the session. "lax" is right for a normal browser tab;
+    # "none" (which forces Secure) is needed when the app is embedded in an
+    # iframe on another origin, such as a hosted preview pane.
+    auth_cookie_samesite: str = field(
+        default_factory=lambda: (os.getenv("AUTH_COOKIE_SAMESITE", "lax") or "lax").strip().lower()
+    )
     max_upload_mb: int = field(default_factory=lambda: int(os.getenv("MAX_UPLOAD_MB", "12")))
     # Demo catalogue only fills an empty database once. Set false in production
     # so a cleared database stays cleared instead of being re-seeded on boot.
