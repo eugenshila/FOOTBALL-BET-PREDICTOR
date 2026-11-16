@@ -204,6 +204,7 @@ async function boot() {
     renderStats(stats);
     await loadParts();
     await restoreWorkspace();
+    await restoreScan();
     await loadDemoImages();
     populateStudioSelect();
   } catch (error) {
@@ -336,6 +337,8 @@ async function identify() {
     const conf = result.report.overall_confidence;
     const via = result.report.grounded ? `${result.report.provider} + web search` : result.report.provider;
     status.textContent = `Done — ${conf} confidence via ${via}.`;
+    saveScan();
+    keepScanPhoto(state.selectedFile);
     await loadParts();
     populateStudioSelect();
   } catch (error) {
@@ -763,6 +766,111 @@ async function restoreWorkspace() {
     }
     if (draft.uncertainCreate) draftMessage("Previous creation may have completed. Check inventory before discarding this draft; retry is blocked to prevent duplicates.");
   } catch { draftMessage("Local recovery data is corrupted or unavailable; it has not been deleted."); toast("Could not restore local recovery data.", true); }
+}
+
+/* A finished identification can cost a provider call and a web search, so the
+   completed report and its photo are kept for this account and re-rendered
+   locally after a reload. Restoring never re-runs the request: an identification
+   that was interrupted mid-flight simply leaves nothing to restore. */
+const scanPhotoKey = () => photoStorageKey("identify");
+
+function scanMessage(text, isError = false) {
+  const status = $("#identify-status");
+  if (!status) return;
+  status.className = isError ? "status error" : "status";
+  status.textContent = text;
+}
+
+/* A storage caveat is added to the identification status rather than replacing
+   it, so "Done — high confidence via gemini + web search" is never lost. */
+function scanNote(text) {
+  const status = $("#identify-status");
+  if (!status) return;
+  const existing = status.textContent.trim();
+  if (existing.includes(text)) return; // already disclosed, e.g. by an earlier flush
+  status.className = "status";
+  status.textContent = existing ? `${existing} ${text}` : text;
+}
+
+function saveScan() {
+  if (!state.account || !state.lastScan) return;
+  try { localStorage.setItem(storageKey("scan"), JSON.stringify({ version: 1, savedAt: Date.now(), result: state.lastScan })); }
+  catch { scanNote("This report could not be saved locally (storage unavailable or full), so it will be gone after a reload."); }
+}
+
+function keepScanPhoto(file) {
+  if (!state.account || !file) return;
+  trackPhoto(photoOperation("put", scanPhotoKey(), file).catch(() => {
+    scanNote("Its photo could not be saved locally, so pick the photo again after a reload.");
+  }));
+}
+
+function clearScan() {
+  if (!state.account) return true;
+  try { localStorage.removeItem(storageKey("scan")); } catch { return false; }
+  state.lastScan = null;
+  state.selectedFile = null;
+  return true;
+}
+
+function scanSavedLabel(savedAt) {
+  if (!Number.isFinite(savedAt)) return "this device";
+  try { return new Date(savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  catch { return "this device"; }
+}
+
+async function restoreScan() {
+  if (!state.account || state.lastScan) return;
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(storageKey("scan")) || "null"); }
+  catch { stored = undefined; }
+  if (stored === null) return;
+
+  const report = stored && stored.result ? stored.result.report : null;
+  if (!stored || stored.version !== 1 || !report || typeof report !== "object" || typeof report.overall_confidence !== "string") {
+    // A report is derived from a photo, so dropping a corrupt copy costs a
+    // re-scan rather than anyone's work — and leaving it would report the same
+    // corruption on every reload.
+    try { localStorage.removeItem(storageKey("scan")); } catch { /* optional */ }
+    scanMessage("The saved identification could not be read, so it was cleared. Nothing was re-run — take a photo to identify again.", true);
+    return;
+  }
+
+  const when = scanSavedLabel(stored.savedAt);
+  state.lastScan = stored.result;
+  try {
+    renderReport(stored.result);
+    renderSources(stored.result);
+    renderMatch(stored.result);
+  } catch (error) {
+    state.lastScan = null;
+    scanMessage(`The saved identification could not be re-rendered (${error.message}). Nothing was re-run — take a photo to identify again.`, true);
+    return;
+  }
+
+  const matched = stored.result.matched_part;
+  const stale = matched && Array.isArray(state.parts) && !state.parts.some((part) => part.id === matched.id);
+  // One message that later photo news is appended to, so a stale match is never
+  // hidden by the "photo recovered" line.
+  const base = `Identification from ${when} restored — not re-run.${stale ? ` Stock record #${matched.id} is no longer in inventory, so the match below is out of date.` : ""}`;
+  scanMessage(base);
+
+  let photo;
+  try { photo = await photoOperation("get", scanPhotoKey()); }
+  catch { photo = null; }
+  if (state.lastScan !== stored.result) return; // a newer scan landed meanwhile
+  if (!(photo instanceof Blob)) {
+    scanMessage(`${base} Its photo is no longer on this device, so pick it again to identify or attach one.`);
+    return;
+  }
+  state.selectedFile = new File([photo], typeof photo.name === "string" && photo.name ? photo.name : "photo.jpg", { type: photo.type });
+  const preview = $("#preview");
+  preview.src = URL.createObjectURL(state.selectedFile);
+  preview.hidden = false;
+  $("#dropzone-idle").hidden = true;
+  // Enabled, not clicked: re-identifying is always the user's decision.
+  $("#btn-identify").disabled = false;
+  scanMessage(`${base} The photo came back too.`);
 }
 
 /* ── drawer / form ────────────────────────────────────────── */
@@ -1261,8 +1369,10 @@ function wireUi() {
     if (state.savingPart) { toast("Wait for the part save to finish before signing out.", true); return; }
     try {
       const draftCleared = clearDraft();
+      // Evaluated separately: a failure in one store must not skip the others.
       const workspaceCleared = clearWorkspace();
-      if (!draftCleared || !workspaceCleared) throw new Error("Browser storage could not be cleared");
+      const scanCleared = clearScan();
+      if (!draftCleared || !workspaceCleared || !scanCleared) throw new Error("Browser storage could not be cleared");
       $("#drawer").hidden = true;
       await Promise.all([...pendingPhotoOperations]);
       await purgeAccountPhotos(state.account);
@@ -1281,8 +1391,8 @@ function wireUi() {
     clearDraft();
     $("#drawer").hidden = true;
   });
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { saveDraft(); saveWorkspace(); } });
-  window.addEventListener("pagehide", () => { saveDraft(); saveWorkspace(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { saveDraft(); saveScan(); saveWorkspace(); } });
+  window.addEventListener("pagehide", () => { saveDraft(); saveScan(); saveWorkspace(); });
   window.addEventListener("scroll", saveWorkspace, { passive: true });
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });

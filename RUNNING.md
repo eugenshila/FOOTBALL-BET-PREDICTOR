@@ -342,15 +342,16 @@ and recreates its own tables inside it.
 
 ### Mobile recovery and local drafts
 
-Verifix remembers the selected app tab and inventory search, stock filter, sort,
-scroll position, and one unfinished part editor per signed-in account on this
-browser/device. Field changes are saved locally as you type; the chosen photo is
-saved separately in IndexedDB. The drawer says when a draft is local: **it is not
-inventory stock until Save part succeeds**. Closing it parks the draft; reopening
-that part resumes it. Opening another part asks before discarding the draft, and
-Discard draft always asks for confirmation. Signing out clears this account's
-local recovery data on the device. Browser storage is not encrypted against
-other users of the same device, and clearing site data removes the draft.
+Verifix remembers the selected app tab, inventory search, stock filter, sort,
+scroll position, one unfinished part editor, and the last completed
+identification per signed-in account on this browser/device. Field changes are
+saved locally as you type; the chosen photo is saved separately in IndexedDB.
+The drawer says when a draft is local: **it is not inventory stock until Save
+part succeeds**. Closing it parks the draft; reopening that part resumes it.
+Opening another part asks before discarding the draft, and Discard draft
+always asks for confirmation. Signing out clears this account's local recovery
+data on the device. Browser storage is not encrypted against other users of
+the same device, and clearing site data removes the draft.
 
 Storage may be disabled, full, or evicted by the browser; heed the warning and
 save to inventory promptly. If a photo cannot be recovered, reselect it before
@@ -359,8 +360,18 @@ the missing record. When a new record was created but its photo upload failed,
 retry updates the same record. If a create request was interrupted before the
 server response arrived, the app blocks retry because it cannot know whether the
 record was created: check inventory, then explicitly discard the draft if needed.
-Completed identification results are not currently retained on reload, and an
-interrupted identification is never restarted automatically.
+
+A finished identification is retained too: the report, its web sources and its
+photo are stored for that account and re-rendered locally after a reload, so the
+same part does not have to be photographed and analysed twice. The status line
+says the report was restored and **not re-run**. Restoring never starts a
+request — Identify part stays a decision you make, even with Auto-detect on. An
+identification that was still in flight when you switched apps leaves nothing to
+restore and is not restarted. If only the photo was evicted, the report still
+returns and the message says the photo is gone, so you are never told a photo was
+recovered when it was not. If the matched stock record was deleted meanwhile, the
+restored match is labelled out of date. A report that cannot be read is cleared
+with a message; it holds derived data only, never work you typed.
 
 To run the isolated reload/storage regression suite (Node 18+):
 

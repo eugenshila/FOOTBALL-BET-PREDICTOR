@@ -453,6 +453,15 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
    sessions, not Supabase. Operators share the same shop inventory (no per-user
    stock isolation). Use trusted LANs and HTTPS; do not expose it directly to the
    internet. See [Windows local-auth setup](docs/LOCAL_AUTH_WINDOWS.md).
+7. **Local recovery stays on this device.** When a phone reloads Verifix after you
+   switch apps, the active tab, inventory search/filter/sort, scroll position, one
+   unfinished part editor (including its photo) and the last *completed*
+   identification come back — per signed-in account, in this browser only. They are
+   not synced between devices, not encrypted against other users of the same
+   device, and they disappear if you clear site data or use private browsing. A
+   local draft is never stock: nothing reaches inventory until **Save part**
+   succeeds, and a restored identification is re-rendered, never re-run. See
+   [Mobile recovery and local drafts](RUNNING.md#mobile-recovery-and-local-drafts).
 
 ---
 

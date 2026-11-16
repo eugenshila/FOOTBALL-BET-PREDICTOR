@@ -8,6 +8,10 @@ const html = fs.readFileSync('web/index.html', 'utf8').replace('<script src="/st
 const js = fs.readFileSync('web/static/app.js', 'utf8');
 const storage = new Map();
 let account = 'a@example.com', parts = [], posts = 0, uploads = 0, failUpload = false, storageFull = false, signedOut = false;
+let identifies = 0, hangIdentify = false;
+// A completed identification: matched_part points at a record that no longer
+// exists, which is what a stale restored match looks like.
+const scanResult = { report: { overall_confidence: 'high', provider: 'gemini', grounded: false, part_name: 'PCV valve', oem_part_number: 'PCV-1', alternate_numbers: [], superseded_numbers: [], category: 'engine', technical_notes: [], fitment: [{ make: 'Toyota', model: 'Vitz', engine: '1NZ', years: '2006-2012' }], sources: [], search_queries: [] }, report_markdown: '**PCV valve** report', matched_part: { id: 999, part_name: 'Deleted record', verified: false, quantity: 2, unit_price: 500, currency: 'KES', image_path: '', bin_location: '' }, candidates: [], image_path: 'uploads/scan.jpg', lens_url: '' };
 const wait = async (fn) => { for (let i=0;i<150;i++) { if (fn()) return; await new Promise(r=>setTimeout(r,10)); } throw Error('timed out'); };
 async function page() {
   const console = new VirtualConsole();
@@ -28,6 +32,7 @@ async function page() {
     else if (path === '/api/parts' && options.method === 'POST') { posts++; data = { ...JSON.parse(options.body), id: posts }; parts.push(data); }
     else if (/^\/api\/parts\/\d+\/image$/.test(path)) { uploads++; if (failUpload) {status=500;data={detail:'upload failed'};} else data=parts.find(p=>p.id===Number(path.split('/')[3])); }
     else if (/^\/api\/parts\/\d+$/.test(path)) { const id=Number(path.split('/')[3]); data=parts.find(p=>p.id===id); if (!data) {status=404;data={detail:'Not found'};} else if (options.method==='PATCH') Object.assign(data,JSON.parse(options.body)); }
+    else if (path === '/api/identify') { identifies++; if (hangIdentify) return new Promise(()=>{}); data = scanResult; }
     else if (path === '/api/auth/signout') { signedOut = true; data={}; }
     else throw Error('Unexpected API '+path);
     return {status, ok:status<400, text:async()=>JSON.stringify(data)};
@@ -39,6 +44,13 @@ async function page() {
 }
 const fire = (w, el, event='input') => el.dispatchEvent(new w.Event(event,{bubbles:true}));
 const key = (email=account) => `verifix:${encodeURIComponent(email)}:draft:v1`;
+const scanKey = (email=account) => `verifix:${encodeURIComponent(email)}:scan:v1`;
+const deleteStoredPhoto = (photoKey) => new Promise((resolve, reject) => {
+  const request = indexedDB.open('verifix-draft-photos', 1);
+  request.onsuccess = () => { const db = request.result; const tx = db.transaction('photos','readwrite'); tx.objectStore('photos').delete(photoKey); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); }; };
+  request.onerror = () => reject(request.error);
+});
+const pickIdentifyPhoto = (w, d, name) => { const file = new File(['identify bytes'], name, {type:'image/jpeg'}); Object.defineProperty(d.querySelector('#file-input'), 'files', {value:[file], configurable:true}); d.querySelector('#file-input').dispatchEvent(new w.Event('change', {bubbles:true})); };
 (async()=>{
  let dom=await page(), w=dom.window, d=w.document;
  d.querySelector('#tab-inventory').click();
@@ -98,5 +110,53 @@ const key = (email=account) => `verifix:${encodeURIComponent(email)}:draft:v1`;
  // Explicit logout clears the current account, not another account's draft.
  d.querySelector('#btn-new-part').click(); assert(storage.has(key())); d.querySelector('#btn-signout').click();
  await wait(()=>signedOut); assert(!storage.has(key())); assert(storage.has(key('b@example.com')));
- console.log('PASS: reload, new/edit, photo, partial failure and retry, cleanup, discard, account isolation'); dom.window.close();
+ // A finished identification is restored after a reload and never re-run.
+ signedOut = false; account = 'a@example.com'; dom = await page(); w = dom.window; d = w.document;
+ pickIdentifyPhoto(w, d, 'scan.jpg');
+ await wait(()=>identifies===1);
+ await wait(()=>d.querySelector('#report').textContent.includes('PCV valve'));
+ assert(JSON.parse(storage.get(scanKey())).version === 1);
+ dom.window.close(); identifies = 0;
+ dom = await page(); w = dom.window; d = w.document;
+ await wait(()=>d.querySelector('#report').textContent.includes('PCV valve'));
+ await wait(()=>d.querySelector('#identify-status').textContent.includes('not re-run'));
+ await new Promise(r=>setTimeout(r,60));
+ assert.equal(identifies, 0);                                              // no automatic re-scan
+ assert(d.querySelector('#match-body').textContent.includes('Deleted record'));
+ assert(d.querySelector('#identify-status').textContent.includes('#999'));  // stale match is disclosed
+ assert(!d.querySelector('#btn-identify').disabled && !d.querySelector('#preview').hidden); // photo came back
+ // Losing only the photo is reported honestly while the report stays usable.
+ await deleteStoredPhoto(`${account}:identify`);
+ dom.window.close(); identifies = 0; dom = await page(); w = dom.window; d = w.document;
+ await wait(()=>d.querySelector('#report').textContent.includes('PCV valve'));
+ await wait(()=>d.querySelector('#identify-status').textContent.includes('photo is no longer on this device'));
+ assert.equal(identifies, 0);
+ assert(d.querySelector('#btn-identify').disabled);                         // nothing to re-identify with
+ // An identification interrupted by the tab switch is not restarted, and the
+ // completed report from before it is still there.
+ hangIdentify = true; pickIdentifyPhoto(w, d, 'interrupted.jpg');
+ await wait(()=>identifies===1);
+ dom.window.close(); hangIdentify = false; identifies = 0;
+ dom = await page(); w = dom.window; d = w.document;
+ await wait(()=>d.querySelector('#report').textContent.includes('PCV valve'));
+ await new Promise(r=>setTimeout(r,60));
+ assert.equal(identifies, 0);
+ // A corrupt report is cleared, not re-run and not shown as if it were valid.
+ storage.set(scanKey(), '{bad'); dom.window.close(); identifies = 0;
+ dom = await page(); w = dom.window; d = w.document;
+ await wait(()=>d.querySelector('#identify-status').textContent.includes('could not be read'));
+ assert.equal(storage.get(scanKey()), null);
+ assert.equal(identifies, 0);
+ assert(!d.querySelector('#report-empty').hidden);
+ // Signing out clears this account's saved identification, not another's.
+ pickIdentifyPhoto(w, d, 'scan.jpg');
+ await wait(()=>identifies===1);
+ await wait(()=>!!storage.get(scanKey()));
+ account = 'b@example.com'; storage.set(scanKey(), JSON.stringify({version:1, savedAt:Date.now(), result:scanResult}));
+ account = 'a@example.com'; signedOut = false;
+ d.querySelector('#btn-signout').click();
+ await wait(()=>signedOut);
+ assert.equal(storage.get(scanKey()), null);
+ assert(!!storage.get(scanKey('b@example.com')));
+ console.log('PASS: reload, new/edit, photo, partial failure and retry, cleanup, discard, account isolation, identification recovery'); dom.window.close();
 })().catch(e=>{console.error(e);process.exitCode=1;});
