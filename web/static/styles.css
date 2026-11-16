@@ -139,7 +139,7 @@ input[type=checkbox] { accent-color: var(--accent); }
 .chip { display: inline-flex; align-items: center; gap: 7px; background: #242a20; border: 1px solid #394232; border-radius: 7px; padding: 5px 9px 5px 5px; color: #b7c0ae; font-size: 10px; transition: border-color .2s; }
 .chip:hover { border-color: var(--accent); }
 .chip img { width: 25px; height: 25px; object-fit: cover; border-radius: 4px; }
-/* Catalogue. */
+/* Catalogue — fixed, evenly weighted columns; one photo and one action group per row. */
 .inventory-panel { padding: 0; overflow: hidden; }
 .inventory-toolbar { padding: 21px 23px; }
 .inventory-toolbar .row { flex: 1; justify-content: flex-end; }
@@ -159,12 +159,56 @@ input[type=checkbox] { accent-color: var(--accent); }
 .table tbody tr { cursor: pointer; }
 .table tr:hover td { background: #ffffff02; }
 .table tr:last-child td { border-bottom: none; }
-.part-name { font-size: 13px; font-weight: 500; line-height: 1.4; }
-.part-sub { font-size: 10px; color: var(--faint); margin-top: 4px; }
-.part-cell { display: flex; align-items: center; gap: 12px; min-width: 200px; }
-.part-thumb { width: 43px; height: 43px; border: 1px solid #424a3c; border-radius: 8px; object-fit: contain; background: #e8e9e4; flex-shrink: 0; }
-.part-placeholder { display: grid; place-items: center; width: 43px; height: 43px; background: #262e20; color: var(--dim); border: 1px solid #3a4433; border-radius: 8px; flex-shrink: 0; }
+
+/* Explicit column widths stop long names, dates and prices from squeezing each
+   other; tabular numerals and nowrap keep the numeric columns on one line. */
+.inventory-table { table-layout: fixed; min-width: 980px; }
+.inventory-table col.col-part { width: 24%; }
+.inventory-table col.col-oem { width: 12%; }
+.inventory-table col.col-bin { width: 8%; }
+.inventory-table col.col-qty { width: 6%; }
+.inventory-table col.col-date { width: 14%; }
+.inventory-table col.col-price { width: 13%; }
+.inventory-table col.col-status { width: 11%; }
+.inventory-table col.col-actions { width: 12%; }
+.inventory-table th, .inventory-table td { padding: 12px; }
+.inventory-table td:first-child, .inventory-table th:first-child { padding-left: 23px; }
+.inventory-table td:last-child, .inventory-table th:last-child { padding-right: 14px; }
+.inventory-table .actions-column { padding-left: 8px; }
+.inventory-table .price-column, .inventory-table .qty-column,
+.inventory-table .bin-column, .inventory-table .date-column { white-space: nowrap; }
+.inventory-table .qty-column, .inventory-table .price-column,
+.inventory-table .date-column { font-variant-numeric: tabular-nums; }
+.inventory-table .qty-column { font-size: 13px; }
+.inventory-table .price-column { font-size: 12.5px; font-weight: 500; color: var(--silver); }
+.inventory-table .bin-column { font-size: 11px; color: #c7cdd6; }
+.inventory-table .date-day { display: block; font-size: 12px; }
+.inventory-table .date-time { display: block; margin-top: 3px; font-size: 10px; color: var(--faint); }
+.inventory-table .part-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.inventory-table .part-status .tag { margin: 0; }
+.inventory-hint { margin: 0; padding: 13px 23px 17px; border-top: 1px solid var(--edge); color: var(--faint); font-size: 11px; }
+
+/* One photo per part, with a small add/replace badge instead of a second photo. */
+.part-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.part-photo { position: relative; flex: 0 0 46px; width: 46px; height: 46px; }
+.part-thumb { width: 46px; height: 46px; border: 1px solid #424a3c; border-radius: 8px; object-fit: contain; background: #e8e9e4; flex-shrink: 0; }
+.part-photo-link { display: block; width: 46px; height: 46px; }
+.part-placeholder { display: grid; place-items: center; width: 46px; height: 46px; background: #262e20; color: var(--dim); border: 1px solid #3a4433; border-radius: 8px; flex-shrink: 0; }
+.part-photo .image-fallback { width: 46px; height: 46px; min-width: 0; min-height: 0; padding: 3px; font-size: 9px; }
+.part-photo-action { position: absolute; right: -7px; bottom: -7px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid #5b6250; border-radius: 50%; background: #242830; color: var(--accent); cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.part-photo-action:hover, .part-photo-action:focus-visible { background: var(--accent); border-color: var(--accent); color: #20241c; }
+.part-photo-action .icon { width: 12px; height: 12px; }
+.part-details { min-width: 0; }
+.part-name { font-size: 13px; font-weight: 500; line-height: 1.5; letter-spacing: .01em; overflow-wrap: anywhere; }
+.part-sub { font-size: 10.5px; line-height: 1.5; letter-spacing: .015em; color: var(--faint); margin-top: 5px; overflow-wrap: anywhere; }
+.inventory-table .part-oem { display: inline-block; font-size: 11.5px; line-height: 1.55; letter-spacing: .05em; color: #c7cdd6; overflow-wrap: anywhere; }
 .mono { font-family: ui-monospace, 'SFMono-Regular', monospace; font-size: 11px; color: #b8bec8; }
+
+/* Compact, non-wrapping row actions. */
+.row-actions { display: inline-flex; flex-wrap: nowrap; justify-content: flex-end; gap: 6px; white-space: nowrap; }
+.inventory-table .btn.tiny.icon-action { width: 28px; height: 28px; min-height: 28px; padding: 0; }
+.inventory-table .btn.tiny.icon-action .icon { width: 15px; height: 15px; }
+
 .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; padding: 3px 7px; border-radius: 20px; white-space: nowrap; margin: 2px 0; }
 .tag.in { background: #94b99b12; color: #a7c5a7; }
 .tag.in::before { content: ''; width: 4px; height: 4px; border-radius: 50%; background: #a7c5a7; }
@@ -331,6 +375,7 @@ body { background: radial-gradient(ellipse 85% 650px at 90% 0, #edc66b06, transp
   #search { width: 100%; flex-basis: 100%; }
   .inventory-toolbar .btn { flex: 1; padding-inline: 10px; }
   .table { min-width: 790px; }
+  .inventory-table { min-width: 980px; }
   .table .btn.tiny { min-height: 35px; }
   .import-block { margin: 16px; padding: 12px; }
   .match-card { grid-template-columns: 1fr; }
@@ -365,8 +410,6 @@ body { background: radial-gradient(ellipse 85% 650px at 90% 0, #edc66b06, transp
 .report-count.unverified strong { color: var(--amber); }
 .report-pdf-export { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--edge); }
 .report-pdf-export .panel-title { margin: 0 0 6px; font-size: 18px; }
-.part-photo-thumb { display: inline-block; width: 38px; height: 38px; object-fit: cover; vertical-align: middle; margin-left: 5px; border: 1px solid var(--edge); border-radius: 5px; }
-.part-photo-link { display: inline-block; vertical-align: middle; }
 .image-fallback { display: inline-grid; place-items: center; min-width: 42px; min-height: 38px; padding: 4px 7px; border: 1px dashed var(--edge); border-radius: 5px; color: var(--faint); background: rgba(255,255,255,.025); font-size: 10px; line-height: 1.2; text-align: center; }
 .image-fallback.large { min-height: 150px; width: 100%; font-size: 13px; }
 .image-fallback.card-fallback { width: 100%; min-height: 180px; }

@@ -156,18 +156,29 @@
         <div id="import-summary"></div>
       </div>
       <div class="table-wrap">
-        <table class="table">
+        <table class="table inventory-table" id="parts-table">
+          <colgroup>
+            <col class="col-part" /><col class="col-oem" /><col class="col-bin" />
+            <col class="col-qty" /><col class="col-date" /><col class="col-price" />
+            <col class="col-status" /><col class="col-actions" />
+          </colgroup>
           <thead>
             <tr>
-              <th>Part</th><th>OEM</th><th>Photo</th><th>Bin</th><th class="num">Qty</th>
-              <th><button id="sort-received" class="table-sort" type="button" aria-label="Sort by date received">Date received ↕</button></th>
-              <th class="num">Price</th><th>Status</th><th></th>
+              <th scope="col">Part</th>
+              <th scope="col">OEM number</th>
+              <th scope="col">Bin</th>
+              <th scope="col" class="num">Qty</th>
+              <th scope="col"><button id="sort-received" class="table-sort" type="button" aria-label="Sort by date received">Date received ↕</button></th>
+              <th scope="col" class="num">Price</th>
+              <th scope="col">Status</th>
+              <th scope="col" class="num">Actions</th>
             </tr>
           </thead>
           <tbody id="parts-body"></tbody>
         </table>
       </div>
       <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
+      <p class="inventory-hint">One photo per part · click the small badge on a photo to add or replace it · click a row to edit its details.</p>
     </div>
   </section>
 

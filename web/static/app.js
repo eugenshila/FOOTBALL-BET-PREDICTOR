@@ -499,6 +499,23 @@ async function loadParts(query = "") {
   }
 }
 
+/* Inventory rows: one photo per part, evenly weighted columns and one compact
+   action group. Icon-only controls keep their titles and aria-labels so the
+   table stays usable without relying on hover alone. */
+const PHOTO_ICON_ADD = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+const PHOTO_ICON_REPLACE = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const EDIT_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const CARDS_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>';
+const PHOTOS_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="15" height="14" rx="2"/><path d="M3 7v12a2 2 0 0 0 2 2h12"/><circle cx="11.5" cy="8" r="1.3"/><path d="m7 15 3.5-3 2.5 2.5 2-2 4 3.5"/></svg>';
+
+function formatReceived(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return `<span class="date-day">${escapeHtml(date.toLocaleDateString(undefined, { dateStyle: "medium" }))}</span>`
+    + `<span class="date-time">${escapeHtml(date.toLocaleTimeString(undefined, { timeStyle: "short" }))}</span>`;
+}
+
 function renderParts() {
   const body = $("#parts-body");
   const parts = state.parts.filter((part) => {
@@ -520,36 +537,44 @@ function renderParts() {
   $("#parts-empty").hidden = parts.length > 0;
   body.innerHTML = parts.map((part) => {
     const photoUrl = mediaUrl(part.image_path);
+    const name = escapeHtml(part.part_name);
     const status = part.quantity <= 0
       ? '<span class="tag out">out</span>'
       : part.quantity <= 3
         ? `<span class="tag low">low · ${part.quantity}</span>`
-        : `<span class="tag in">in stock</span>`;
-    const verified = part.verified ? "" : ' <span class="tag unverified">unverified</span>';
-    const received = part.last_received_at
-      ? new Date(part.last_received_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
-      : "—";
+        : '<span class="tag in">in stock</span>';
+    const verified = part.verified ? "" : '<span class="tag unverified">unverified</span>';
+    const photoAction = part.image_path ? "Replace" : "Add";
+    const photo = photoUrl
+      ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View full-size photo"><img class="part-thumb" src="${escapeHtml(photoUrl)}" alt="Photo of ${name}" loading="lazy" /></a>`
+      : '<span class="part-placeholder" aria-hidden="true">◇</span>';
+    const sub = `${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}`;
     return `<tr data-id="${part.id}">
-      <td><div class="part-cell">
-        ${mediaUrl(part.image_path) ? `<img class="part-thumb" src="${escapeHtml(mediaUrl(part.image_path))}" alt="" loading="lazy" />` : '<span class="part-placeholder" aria-hidden="true">◇</span>'}
-        <div><div class="part-name">${escapeHtml(part.part_name)}</div>
-        <div class="part-sub">${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}</div></div>
-      </div></td>
-      <td class="mono">${escapeHtml(part.oem_part_number || "—")}</td>
-      <td>
-        <input class="part-photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${part.id}" hidden />
-        <button class="btn tiny" type="button" data-photo="${part.id}" title="${part.image_path ? "Replace" : "Add"} this part's photo">${part.image_path ? "Replace photo" : "Add photo"}</button>
-        ${photoUrl ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View current photo"><img class="part-photo-thumb" src="${escapeHtml(photoUrl)}" alt="Photo of ${escapeHtml(part.part_name)}" /></a>` : (part.image_path ? '<span class="image-fallback">Photo unavailable</span>' : "")}
+      <td class="part-column">
+        <div class="part-cell">
+          <div class="part-photo">
+            ${photo}
+            <input class="part-photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${part.id}" hidden />
+            <button class="part-photo-action" type="button" data-photo="${part.id}" title="${photoAction} photo for ${name}" aria-label="${photoAction} photo for ${name}">${photoAction === "Replace" ? PHOTO_ICON_REPLACE : PHOTO_ICON_ADD}</button>
+          </div>
+          <div class="part-details">
+            <div class="part-name">${name}</div>
+            <div class="part-sub">${sub || "&nbsp;"}</div>
+          </div>
+        </div>
       </td>
-      <td>${escapeHtml(part.bin_location || "—")}</td>
-      <td class="num">${part.quantity}</td>
-      <td title="Latest recorded positive stock movement">${escapeHtml(received)}</td>
-      <td class="num">${escapeHtml(money(part.unit_price, part.currency))}</td>
-      <td>${status}${verified}</td>
-      <td class="num">
-        <button class="btn tiny" data-card="${part.id}" title="Generate promo cards">Cards</button>
-        <button class="btn tiny" data-edit="${part.id}" title="Edit">Edit</button>
-        <button class="btn tiny" data-images="${part.id}" title="Review image candidates">Photos</button>
+      <td class="oem-column"><span class="part-oem mono">${escapeHtml(part.oem_part_number || "—")}</span></td>
+      <td class="bin-column">${escapeHtml(part.bin_location || "—")}</td>
+      <td class="qty-column num">${part.quantity}</td>
+      <td class="date-column" title="Latest recorded positive stock movement">${formatReceived(part.last_received_at)}</td>
+      <td class="price-column num">${escapeHtml(money(part.unit_price, part.currency))}</td>
+      <td class="status-column"><div class="part-status">${status}${verified}</div></td>
+      <td class="actions-column">
+        <div class="row-actions">
+          <button class="btn tiny icon-action" type="button" data-edit="${part.id}" title="Edit part" aria-label="Edit ${name}">${EDIT_ICON}</button>
+          <button class="btn tiny icon-action" type="button" data-card="${part.id}" title="Generate promo cards" aria-label="Promo cards for ${name}">${CARDS_ICON}</button>
+          <button class="btn tiny icon-action" type="button" data-images="${part.id}" title="Review photos" aria-label="Review photos for ${name}">${PHOTOS_ICON}</button>
+        </div>
       </td>
     </tr>`;
   }).join("");

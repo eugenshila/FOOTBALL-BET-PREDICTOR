@@ -56,10 +56,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Retired default brands. Anything else is a genuine custom name and is kept.
+LEGACY_SHOP_NAMES = {"", "TRAIL VAULT", "VERIFIX", "SHILA AUTO PARTS"}
+
+
+def normalize_shop_name(name: str) -> str:
+    """Upgrade retired default brands to Verifix; preserve custom shop names."""
+    value = str(name or "").strip()
+    return "Verifix" if " ".join(value.upper().split()) in LEGACY_SHOP_NAMES else value
+
+
 def _shop_name() -> str:
     """Upgrade the former default brand without overwriting a custom shop name."""
-    name = os.getenv("SHOP_NAME", "").strip()
-    return "Verifix" if name.upper() in {"", "TRAIL VAULT", "VERIFIX"} else name
+    return normalize_shop_name(os.getenv("SHOP_NAME", ""))
 
 
 @dataclass
