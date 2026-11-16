@@ -1,4 +1,4 @@
-# Automotive Spare Parts Identification & Inventory Engine
+# Verifix — Jeep & Mopar Parts Inventory
 
 Identify an automotive component from a photo, keep warehouse/bin stock accurate, and
 generate WhatsApp-ready promotional cards — in one flow, on a phone, at the counter.
@@ -7,13 +7,22 @@ generate WhatsApp-ready promotional cards — in one flow, on a phone, at the co
 
 ---
 
+## Verifix workspace
+
+A charcoal-and-warm-yellow interface with responsive navigation, live stock
+overview cards, CSV/ZIP intake and a matching local sign-in screen. Typography
+and the brand mark are served locally; no external fonts or cloud login are needed.
+Existing `SHOP_NAME=TRAIL VAULT` settings automatically display Verifix; custom
+shop names are preserved. This visual refresh does not migrate or reset inventory,
+passwords or sessions.
+
 ## What it does
 
 | Module | Implemented capability |
 |---|---|
 | **1 · Image capture & identification** | Upload/drag a photo or shoot it with the phone camera — identification starts automatically on upload. Returns part name + category, OEM number, alternate/cross-reference numbers, superseded revisions, vehicle fitment (make · model · engine · years), and the installation/service notes a fitter actually needs. With a Gemini key it also **searches Google** for the part number and lists the pages it used. |
 | **2 · Inventory & warehouse** | Structured records: part name, OEM, cross-references, fitment, condition, warehouse bin, quantity, unit price. Full CRUD, search by name/OEM/bin/vehicle/cross-reference, stock adjustments with an audit trail for every quantity change. |
-| **3 · WhatsApp promo generator** | Server-side rendered cards in **9:16 (1080×1920)**, **1:1 (1080×1080)**, **4:3 (1200×900)** plus a printable **bin label (600×300)**. Charcoal theme, metallic-silver type, restrained red accents, in-stock badge, price and a WhatsApp CTA. A copy-ready WhatsApp caption is generated alongside. |
+| **3 · WhatsApp promo generator** | Server-side rendered cards in **9:16 (1080×1920)**, **1:1 (1080×1080)**, **4:3 (1200×900)** plus a printable **bin label (600×300)**. Charcoal theme, metallic-silver type, warm-yellow accents (red reserved for out-of-stock), in-stock badge, price and a WhatsApp CTA. A copy-ready WhatsApp caption is generated alongside. |
 
 The report the engine prints follows the required contract exactly:
 
@@ -25,11 +34,73 @@ The report the engine prints follows the required contract exactly:
 
 ---
 
+## Verifix stock intake & photo review
+
+- The front-door **CSV drop zone** accepts stock lists up to 8 MB. A dry run
+  shows row outcomes and mapped columns before **Apply import** writes stock.
+  Duplicate OEM rows are skipped by default; existing stock is not overwritten.
+- In the browser workflow, CSV photo paths are deferred. After import, each row
+  offers **Find local candidates**, **Approve this photo**, or **Skip / keep
+  current photo**. Inventory's **Photos** button reopens review for any part.
+- Candidates come from images already in the local reference catalogue or
+  inventory, ranked by OEM/cross-reference or similar part-name tokens. This is
+  **not live web image search or visual verification**. With no suitable local
+  images, leave the row without a photo or add your own via Edit.
+- Suggestions never write a photo automatically. Approval updates only that
+  part's photo, not its OEM, fitment, stock or verification. Existing publishing
+  verification gates still apply. No bulk auto-approval.
+- Shop identity defaults to **Verifix**, Jeep / Mopar first; other makes
+  remain supported. `SHOP_NAME` and `SHOP_TAGLINE` still override the defaults.
+
+### Uploading stock with photos (ZIP)
+
+The same front-door drop zone accepts **CSV up to 8 MB** or **ZIP up to 32 MB**.
+Put `stock.csv` at the ZIP root with `part_name`, `oem_part_number`, quantity and
+other stock fields. Include photos such as `images/05184101AC.jpg` and set the
+row's `image_path` to that filename. If `image_path` is blank, an exact filename
+stem / OEM match is attempted. Leading zeros are significant; JPG, PNG and WebP
+are supported. Use one unique OEM per row and merge spreadsheet duplicates first.
+
+Preview shows matching filenames, missing/unused image counts and stock outcomes.
+**Apply import** stores the photos as row-specific review candidates, not approved
+inventory photos. **Find local candidates → Approve this photo** saves an image;
+skipping keeps the current photo. Re-uploading an existing OEM skips its stock
+without increasing quantity; its new photo can still be reviewed. ZIP uploads
+never grant OEM verification, even if their CSV says `verified=true`.
+
+Archives are validated without extracting paths, with limits of 1,200 entries,
+80 MB expanded, 8 MB per CSV/image, 1,000 CSV rows and 16 million pixels per image.
+Unsafe paths, symlinks, encrypted files, corrupt images, ambiguous matches and
+image filenames that disagree with the row's OEM are rejected.
+
+For an offline upload test, generate **labelled placeholders, not product photos**:
+
+```bash
+python scripts/build_stock_test_bundle.py stock.csv exports/test-stock.zip
+```
+
+Every image is visibly marked `TEST PLACEHOLDER - NOT A PART PHOTO`. The bundle
+contains `TEST-ONLY.txt`, and the app flags it as a test package. Replace **all**
+placeholders with actual photos before removing that marker and the CSV test
+notes. Never use reference/placeholder images as evidence of a used part's actual
+condition. Blank prices currently import as zero and must be set before quoting.
+
+**Data note:** inventory and uploaded media are git-ignored shop data, not part
+of this repository. Export a CSV and keep an external backup of your database and
+photos before changing environments. An empty checkout starts with the four-part
+demo catalogue, not your real stock list. PostgreSQL data in `/tmp` is not durable.
+
+The sample cards above are legacy red-theme examples; newly generated cards use
+Verifix's warm-yellow theme.
+
+---
+
 ## Quick start
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python -m app.auth create-user
 ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -46,12 +117,26 @@ version:
 pip install -r requirements-postgres.txt            # psycopg
 # .env:  DATABASE_URL=postgresql://partsid_user:pw@localhost:5432/partsid
 python -m app.cli check-db                          # verify before starting
+python -m app.auth create-user                      # local login, once
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 > **Ports:** the app listens on **8000**; PostgreSQL stays on its default **5432**.
 > The app connects to Postgres through `DATABASE_URL`, so nothing needs to move
 > ports and 5432 is not a web page.
+
+### Local login (no Supabase)
+
+Run `python -m app.auth create-user` on the server to create each local account.
+Passwords are prompted, salted/hashed and stored separately from stock in
+`data/local-auth.db`; sessions last 12 hours by default and survive app restarts.
+No default password or public registration is provided. Use
+`python -m app.auth reset-password` to reset a local password and revoke that
+account's sessions. Existing Supabase credentials are not migrated automatically.
+
+For the existing Windows auth-enabled deployment, use the targeted installer and
+[step-by-step CMD instructions](docs/LOCAL_AUTH_WINDOWS.md). It replaces only
+`app/auth.py` after backing it up, preserving PostgreSQL, `.env` and photos.
 
 ### CLI
 
@@ -79,7 +164,10 @@ every UI flow in jsdom (identify → report → citations → inventory search �
 generation → CSV import → new-part drawer):
 
 ```bash
-npm install jsdom && node scripts/ui_smoke.cjs   # server on :8000
+npm install jsdom
+# Use a dedicated local test account. Set AUTH_EMAIL and AUTH_PASSWORD in your
+# shell, or AUTH_COOKIE, then run against the server on :8000:
+node scripts/ui_smoke.cjs
 ```
 
 API tests:
@@ -311,7 +399,7 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 |---|---|---|
 | `DATABASE_URL` | *(empty = SQLite)* | `postgresql://user:pw@localhost:5432/partsid` to use PostgreSQL |
 | `VISION_PROVIDER` | `auto` | `auto`/`openai`/`gemini`/`anthropic`/`ollama`/`offline` |
-| `SHOP_NAME` | `SHILA AUTO PARTS` | Wordmark on every card |
+| `SHOP_NAME` | `Verifix` | Wordmark on every card |
 | `WHATSAPP_NUMBER` | `+254 700 000 000` | Order CTA on cards and captions |
 | `CURRENCY` | `KES` | Price formatting |
 | `REQUIRE_PART_VERIFICATION` | `true` | Block cards for unverified records |
@@ -336,8 +424,10 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
    Google Lens links also require a publicly reachable photo.
 5. **Offline matching only knows your catalogue.** It cannot identify a part you have
    never photographed.
-6. **Single-user by default.** There is no authentication. Put it behind a login/
-   reverse proxy before exposing it beyond a trusted network.
+6. **Local operator accounts.** Login uses local password hashes and revocable
+   sessions, not Supabase. Operators share the same shop inventory (no per-user
+   stock isolation). Use trusted LANs and HTTPS; do not expose it directly to the
+   internet. See [Windows local-auth setup](docs/LOCAL_AUTH_WINDOWS.md).
 
 ---
 

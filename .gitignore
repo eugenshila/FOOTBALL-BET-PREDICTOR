@@ -27,3 +27,10 @@ exports/
 .idea/
 .vscode/
 *.swp
+
+# Optional browser smoke-test dependencies
+node_modules/
+
+# Local login accounts/sessions and Windows auth backups (never commit)
+data/local-auth.db*
+app/auth.*.bak

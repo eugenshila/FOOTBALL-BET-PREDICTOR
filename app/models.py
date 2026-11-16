@@ -239,3 +239,7 @@ class DemoImage(BaseModel):
     name: str
     path: str
     url: str
+
+
+class ImageApproval(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=64)

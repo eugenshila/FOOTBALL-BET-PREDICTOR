@@ -120,6 +120,21 @@ If this fails, jump to **Troubleshooting**.
 
 ---
 
+## 4a. Create your local login (once)
+
+Supabase is no longer required for authentication. From the project folder:
+
+```powershell
+python -m app.auth create-user
+```
+
+Enter a local account email and a new unique password (12–128 characters).
+There is no email confirmation. Existing Supabase passwords are not migrated.
+Login accounts/sessions are in `data/local-auth.db`, separate from PostgreSQL
+inventory. Keep `DATABASE_URL` pointing at your existing stock database. For a
+Windows installation with the previous auth module, see
+[the targeted local-auth installer guide](docs/LOCAL_AUTH_WINDOWS.md).
+
 ## 5. Start the app
 
 ```powershell
@@ -287,6 +302,7 @@ download, CSV dry-run + apply, the new-part drawer, and the unverified-part gate
 
 ```powershell
 npm install jsdom                 # once (needs Node.js)
+# Set AUTH_EMAIL / AUTH_PASSWORD for a dedicated local test account first.
 node scripts/ui_smoke.cjs         # server must be running on :8000
 ```
 

@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import cards, db, importers, links, storage, vision
+from . import auth, cards, db, image_review, importers, links, stock_bundle, storage, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -30,6 +30,7 @@ from .models import (
     IdentificationReport,
     IdentifyResponse,
     InventoryPart,
+    ImageApproval,
     PartCreate,
     PartUpdate,
     StockMovement,
@@ -61,7 +62,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="Automotive Spare Parts ID Engine",
+    title="Verifix — Parts & Inventory",
     version="1.0.0",
     description=(
         "Identify automotive components from photos, keep warehouse/bin inventory, "
@@ -77,6 +78,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Local authentication: no Supabase calls, no public self-registration.
+# The login module also works as a drop-in for the auth-enabled Windows version.
+app.middleware("http")(auth.guard)
+app.include_router(auth.router)
 
 
 # --- static media ----------------------------------------------------------
@@ -208,6 +215,27 @@ def patch_part(part_id: int, payload: PartUpdate) -> InventoryPart:
     if part is None:
         raise HTTPException(status_code=404, detail="part not found")
     return part
+
+
+@app.get("/api/parts/{part_id}/image-candidates")
+def image_candidates(part_id: int) -> dict:
+    part = get_part(part_id)
+    return {"part_id": part_id, "candidates": image_review.candidates_for(part),
+            "source": "local catalogue", "requires_approval": True}
+
+
+@app.post("/api/parts/{part_id}/image-approval", response_model=InventoryPart)
+def approve_image(part_id: int, payload: ImageApproval) -> InventoryPart:
+    part = get_part(part_id)
+    candidate = next((c for c in image_review.candidates_for(part)
+                      if c["candidate_id"] == payload.candidate_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=409, detail="Candidate is no longer available. Refresh the image review.")
+    # Deliberately leave OEM, fitment, quantity and verification untouched.
+    updated = db.update_part(part_id, PartUpdate(image_path=candidate["image_path"]))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="part not found")
+    return updated
 
 
 @app.delete("/api/parts/{part_id}", status_code=204)
@@ -402,24 +430,47 @@ async def import_parts(
     file: UploadFile = File(...),
     dry_run: bool = Query(True, description="Parse and report without writing anything"),
     update_existing: bool = Query(False, description="Fill blanks on records matching an OEM number"),
+    review_images: bool = Query(False, description="Ignore CSV photo paths; review local candidates after importing"),
     mark_verified: bool = Query(
         False, description="Treat the file as the shop's own verified records"
     ),
 ) -> dict:
-    raw = await file.read()
+    is_bundle = (file.filename or "").lower().endswith(".zip")
+    limit = stock_bundle.MAX_UPLOAD if is_bundle else 8 * 1024 * 1024
+    raw = await file.read(limit + 1)
     if not raw:
         raise HTTPException(status_code=422, detail="empty file")
-    if len(raw) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="CSV larger than 8 MB")
-
+    if len(raw) > limit:
+        raise HTTPException(status_code=413, detail="ZIP larger than 32 MB" if is_bundle else "CSV larger than 8 MB")
+    bundle = stock_bundle.read_bundle(raw) if is_bundle else None
+    # ZIP imports are validated in full before stock or image files are written.
+    if bundle and not dry_run:
+        preview = importers.import_csv(bundle.csv_text, dry_run=True, update_existing=update_existing,
+                                       default_currency=settings.currency, defer_images=True)
+        if preview.errors:
+            raise HTTPException(status_code=422, detail="Fix CSV row errors before applying this ZIP")
     report = importers.import_csv(
-        raw,
+        bundle.csv_text if bundle else raw,
         dry_run=dry_run,
         update_existing=update_existing,
         default_currency=settings.currency,
-        default_verified=mark_verified,
+        default_verified=False if bundle else mark_verified,
+        defer_images=review_images or is_bundle,
     )
     payload = report.summary()
+    if bundle:
+        if not dry_run:
+            for result in report.results:
+                if result.part_id and result.row in bundle.images and result.status in {"created", "updated", "skipped"}:
+                    part = db.get_part(result.part_id)
+                    if part is not None:
+                        path, _ = _store_upload(bundle.images[result.row], bundle.image_names[result.row])
+                        image_review.register_upload(part, str(path), test_only=bundle.test_only)
+        payload["bundle"] = {
+            "images_matched": len(bundle.images), "images_missing": bundle.rows - len(bundle.images),
+            "unused_images": bundle.unused_images, "test_only": bundle.test_only,
+            "requires_approval": True,
+        }
     payload["results"] = [
         {
             "row": r.row,
@@ -428,6 +479,7 @@ async def import_parts(
             "oem_part_number": r.oem_part_number,
             "part_id": r.part_id,
             "message": r.message,
+            **({"image_filename": bundle.image_names.get(r.row, "")} if bundle else {}),
         }
         for r in report.results[:500]
     ]

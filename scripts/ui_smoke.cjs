@@ -12,6 +12,15 @@
 const { JSDOM, VirtualConsole } = require("jsdom");
 
 const BASE = process.env.BASE || "http://localhost:8000";
+// Send a local test session only to this server, never to external URLs.
+const rawFetch = globalThis.fetch;
+let authCookie = process.env.AUTH_COOKIE || "";
+async function fetch(input, init = {}) {
+  const url = typeof input === "string" ? new URL(input, BASE) : new URL(input instanceof URL ? input.href : input.url);
+  const headers = new Headers(init.headers || {});
+  if (url.origin === new URL(BASE).origin && authCookie) headers.set("Cookie", authCookie);
+  return rawFetch(input, { ...init, headers });
+}
 const results = [];
 const consoleErrors = [];
 
@@ -53,7 +62,23 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
 }
 
 (async () => {
-  const html = await (await fetch(`${BASE}/`)).text();
+  if (process.env.AUTH_EMAIL && process.env.AUTH_PASSWORD) {
+    const login = await fetch(`${BASE}/api/auth/signin`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: process.env.AUTH_EMAIL, password: process.env.AUTH_PASSWORD }),
+    });
+    if (!login.ok) throw new Error(`Local test login failed (${login.status})`);
+    const cookies = new Map(login.headers.getSetCookie().map((cookie) => {
+      const pair = cookie.split(";")[0];
+      const split = pair.indexOf("=");
+      return [pair.slice(0, split), pair.slice(split + 1)];
+    }));
+    authCookie = [...cookies].filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join("; ");
+    check("local login works before loading the workspace", Boolean(authCookie));
+  }
+  const page = await fetch(`${BASE}/`);
+  if (new URL(page.url).pathname === "/login") throw new Error("Set AUTH_EMAIL and AUTH_PASSWORD for a dedicated local test account, or AUTH_COOKIE.");
+  const html = await page.text();
   const appJs = await (await fetch(`${BASE}/static/app.js`)).text();
 
   const virtualConsole = new VirtualConsole();
@@ -72,6 +97,8 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   });
   const { window } = dom;
   const doc = window.document;
+  // jsdom has no layout viewport; smooth scrolling is a browser-only effect.
+  window.scrollTo = () => {};
 
   // ── give the page a working environment (jsdom lacks fetch/File/objectURL) ──
   window.fetch = (input, init) => {
@@ -148,11 +175,10 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
     reportText.includes("PART IDENTIFICATION REPORT") &&
     reportText.includes("WAREHOUSE & INVENTORY DETAILS") &&
     reportText.includes("WHATSAPP PROMOTIONAL POST GENERATOR"));
-  // Sample photos come from the demo catalogue, so with a real inventory the
-  // scan legitimately matches nothing - the UI must say so rather than break.
-  check("unmatched scans explain the next step",
+  // The same sample can match demo stock or be absent in a real catalogue.
+  check("scan displays the stock match or the next step",
     doc.querySelector("#match-block").hidden === false &&
-    /no stock match|not in inventory/i.test(doc.querySelector("#match-body").textContent),
+    /stock record|unverified record|no stock match/i.test(doc.querySelector("#match-badge").textContent),
     doc.querySelector("#match-badge")?.textContent?.trim());
   check("report shows the identified part name",
     reportText.includes("Part Name"));
@@ -205,6 +231,9 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   doc.querySelectorAll("#demo-chips .chip")[1].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   await waitFor("grounded report", () => doc.querySelector("#sources-block").hidden === false, 30000);
 
+  check("unmatched scans explain the next step",
+    /not in inventory/i.test(doc.querySelector("#match-body").textContent)
+      && Boolean(doc.querySelector("#btn-adopt-report")));
   const links = doc.querySelectorAll("#source-list a");
   check("grounded sources render as external links",
     links.length === 2 && links[0].href.includes("moparparts.com"),
@@ -244,6 +273,45 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   search.value = "";
   search.dispatchEvent(new window.Event("input", { bubbles: true }));
   await waitFor("unfiltered rows", () => doc.querySelectorAll("#parts-body tr").length === rows);
+
+  // Modern workspace totals, keyboard navigation and functional stock filters.
+  const overview = await (await fetch(`${BASE}/api/stats`)).json();
+  check("overview cards show live catalogue and unit totals",
+    doc.querySelector("#metric-parts").textContent === overview.parts.toLocaleString("en-KE")
+      && doc.querySelector("#metric-units").textContent === overview.units.toLocaleString("en-KE"));
+  check("out-of-stock total comes from inventory",
+    doc.querySelector("#metric-out").textContent === overview.out_of_stock.toLocaleString("en-KE"));
+  const inventoryTab = doc.querySelector("#tab-inventory");
+  inventoryTab.focus();
+  inventoryTab.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
+  check("keyboard navigation selects promo studio",
+    doc.activeElement.id === "tab-studio" && doc.querySelector("#tab-studio").getAttribute("aria-selected") === "true"
+    && doc.querySelector("#workspace-title").textContent === "Promo studio");
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+  check("Home selects the first workspace tab",
+    doc.activeElement.id === "tab-identify" && doc.querySelector("#tab-identify").tabIndex === 0
+    && doc.querySelector("#tab-studio").tabIndex === -1);
+  inventoryTab.click();
+  const filterProbe = await makePart({ part_name: "UI Filter Probe", oem_part_number: `UIT-FILTER-${RUN}`, quantity: 0, verified: false });
+  inventoryTab.click();
+  await waitFor("filter probe loaded", () => doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`));
+  doc.querySelector('[data-stock-filter="out"]').click();
+  check("out-of-stock filter shows only empty stock lines",
+    Boolean(doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`))
+      && [...doc.querySelectorAll("#parts-body tr")].every((r) => Number(r.querySelectorAll("td")[3].textContent) === 0));
+  doc.querySelector('[data-stock-filter="in"]').click();
+  check("in-stock filter excludes empty stock lines", !doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`));
+  doc.querySelector('[data-stock-filter="review"]').click();
+  check("verification filter shows unverified records",
+    Boolean(doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`))
+      && [...doc.querySelectorAll("#parts-body tr")].every((r) => r.querySelector(".tag.unverified")));
+  check("filter selection and visible count are accessible",
+    doc.querySelector('[data-stock-filter="review"]').getAttribute("aria-pressed") === "true"
+      && Number(doc.querySelector("#inventory-count").textContent) === doc.querySelectorAll("#parts-body tr").length);
+  doc.querySelector('[data-stock-filter="all"]').click();
+  await fetch(`${BASE}/api/parts/${filterProbe.id}`, { method: "DELETE" });
+  inventoryTab.click();
+  await waitFor("filter probe removed", () => doc.querySelectorAll("#parts-body tr").length === rows);
 
   // ── 5. promo studio ────────────────────────────────────────────────────────
   // Card generation only works for *verified* records, so the test creates its
@@ -311,12 +379,14 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
 
   // ── 6. CSV import (dry run through the real UI path) ───────────────────────
   doc.querySelector('.tab[data-view="inventory"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-  const csv = "Part Name,OEM,Fitment,Qty,Price\nUI Test Bracket,UIT-9001,Toyota Hilux 2.7L 2015-present,7,1200\n";
+  const csv = "Part Name,OEM,Fitment,Qty,Price,Image\nUI Test PCV Valve,UIT-9001,Toyota Hilux 2.7L 2015-present,7,1200,assets/seed/pcv-valve.jpg\n";
   const csvFile = new window.File([csv], "ui-test.csv", { type: "text/csv" });
   const csvInput = doc.querySelector("#csv-input");
   Object.defineProperty(csvInput, "files", { value: [csvFile], configurable: true });
-  csvInput.dispatchEvent(new window.Event("change", { bubbles: true }));
-  await waitFor("import summary", () => doc.querySelector("#import-summary").textContent.includes("UI Test Bracket")
+  const stockDrop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(stockDrop, "dataTransfer", { value: { files: [csvFile] } });
+  doc.querySelector("#csv-dropzone").dispatchEvent(stockDrop);
+  await waitFor("import summary", () => doc.querySelector("#import-summary").textContent.includes("UI Test PCV Valve")
     || doc.querySelector("#import-summary").textContent.includes("rows read"), 20000);
   const importText = doc.querySelector("#import-summary").textContent;
   check("dry run reports the row without writing", importText.includes("1") && doc.querySelector("#import-block").hidden === false,
@@ -336,9 +406,67 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
     JSON.stringify(imported.fitment?.[0] || {}));
   check("imported price parsed", imported.unit_price === 1200, String(imported.unit_price));
 
+  check("CSV photo is deferred until explicit approval", imported.image_path === "");
+  await waitFor("image review rows", () => doc.querySelector(`[data-review="${imported.id}"]`));
+  const reviewRow = doc.querySelector(`[data-review="${imported.id}"]`);
+  reviewRow.querySelector("[data-suggest]").click();
+  await waitFor("local photo candidate", () => reviewRow.querySelector("[data-approve]"));
+  const beforeApproval = (await (await fetch(`${BASE}/api/parts/${imported.id}`)).json());
+  check("photo suggestions do not write stock", beforeApproval.image_path === "" && !beforeApproval.verified);
+  reviewRow.querySelector("[data-skip]").click();
+  check("skip leaves no pending candidate buttons", reviewRow.querySelectorAll("[data-approve]").length === 0);
+  reviewRow.querySelector("[data-suggest]").click();
+  await waitFor("candidate after skip", () => reviewRow.querySelector("[data-approve]"));
+  reviewRow.querySelector("[data-approve]").click();
+  await waitFor("photo approval saved", () => reviewRow.querySelector(".status").textContent.includes("Photo approved"));
+  const approved = (await (await fetch(`${BASE}/api/parts/${imported.id}`)).json());
+  check("per-row photo approval saves only the photo", Boolean(approved.image_path) && !approved.verified
+    && approved.quantity === imported.quantity && approved.oem_part_number === imported.oem_part_number);
+
   // clean up the parts created by this run
   await fetch(`${BASE}/api/parts/${imported.id}`, { method: "DELETE" });
   await cleanup();
+
+  // ZIP stock + image upload uses the same real front-door file input.
+  const zipNumber = `UIT-ZIP-${RUN}`;
+  const { execFileSync } = require("node:child_process");
+  const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+  const zipBytes = execFileSync(python, ["-c", `
+import io,sys,zipfile
+from pathlib import Path
+number=sys.argv[1]
+output=io.BytesIO()
+with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as z:
+ z.writestr('stock.csv',f'part_name,oem_part_number,condition,quantity,image_path,verified\\nUI ZIP PCV Valve,{number},Used,2,images/{number}.jpg,true\\n')
+ z.writestr(f'images/{number}.jpg',Path('assets/seed/pcv-valve.jpg').read_bytes())
+ z.writestr('TEST-ONLY.txt','Upload test, not a confirmed product image')
+sys.stdout.buffer.write(output.getvalue())
+`, zipNumber]);
+  const zipFile = new window.File([zipBytes], "ui-stock.zip", { type: "application/zip" });
+  Object.defineProperty(csvInput, "files", { value: [zipFile], configurable: true });
+  csvInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor("ZIP preview", () => doc.querySelector("#import-summary").textContent.includes("1 images matched"));
+  check("ZIP preview identifies matched filenames and test-only warning",
+    doc.querySelector("#import-summary").textContent.includes(`images/${zipNumber}.jpg`)
+      && doc.querySelector("#import-summary").textContent.includes("TEST PACKAGE"));
+  check("ZIP preview does not create inventory", (await (await fetch(`${BASE}/api/parts?q=${zipNumber}`)).json()).length === 0);
+  doc.querySelector("#btn-apply-import").click();
+  const zipPart = await waitFor("ZIP stock written", async () => {
+    const parts = await (await fetch(`${BASE}/api/parts?q=${zipNumber}`)).json();
+    return parts[0];
+  });
+  check("ZIP stock preserves quantity and defers image/verification",
+    zipPart.quantity === 2 && zipPart.condition === "Used" && !zipPart.verified && !zipPart.image_path);
+  await waitFor("ZIP review", () => doc.querySelector(`[data-review="${zipPart.id}"]`));
+  const zipRow = doc.querySelector(`[data-review="${zipPart.id}"]`);
+  zipRow.querySelector("[data-suggest]").click();
+  await waitFor("ZIP candidate", () => zipRow.querySelector("[data-approve]"));
+  check("uploaded test candidate is clearly labelled", zipRow.querySelector(".review-candidate").textContent.includes("TEST PLACEHOLDER"));
+  zipRow.querySelector("[data-approve]").click();
+  await waitFor("ZIP photo saved", () => zipRow.querySelector(".status").textContent.includes("Photo approved"));
+  const zipSaved = await (await fetch(`${BASE}/api/parts/${zipPart.id}`)).json();
+  check("ZIP image saves only after row approval", Boolean(zipSaved.image_path) && !zipSaved.verified && zipSaved.quantity === 2);
+  await fetch(`${BASE}/api/parts/${zipPart.id}`, { method: "DELETE" });
 
   // ── 7. new-part drawer ─────────────────────────────────────────────────────
   doc.querySelector("#btn-new-part").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
