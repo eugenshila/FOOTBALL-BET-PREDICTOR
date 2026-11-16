@@ -1,7 +1,7 @@
 """WhatsApp promotional card renderer.
 
 Design language: charcoal automotive theme, metallic-silver typography, restrained
-red accents. Sizes are social-native so they never get re-compressed into mush:
+warm-yellow accents. Sizes are social-native so they never get re-compressed into mush:
 
     story      1080x1920   9:16   WhatsApp status / reels
     square     1080x1080   1:1    group posts, catalogue grid
@@ -37,8 +37,9 @@ PANEL = (30, 33, 38)
 PANEL_EDGE = (58, 63, 72)
 SILVER = (232, 235, 240)
 SILVER_DIM = (156, 163, 173)
+ACCENT = (237, 189, 86)
 RED = (217, 43, 43)
-RED_DEEP = (150, 26, 26)
+ACCENT_DEEP = (168, 121, 36)
 GREEN = (46, 196, 126)
 INK = (14, 15, 17)
 
@@ -475,22 +476,22 @@ def _header(draw: ImageDraw.ImageDraw, ctx: CardContext, fmt: Format, m: int) ->
     f_name = font(FONT_BOLD, name_size)
     end = draw_tracked(draw, (m, m * 0.62), ctx.shop.upper(), f_name, SILVER, 3.0 if big else 2.0)
 
-    # red block accent at the right of the wordmark
-    draw.rectangle((end + 14, m * 0.62 + name_size * 0.28, end + 14 + 46, m * 0.62 + name_size * 0.28 + 8), fill=RED)
+    # warm-yellow block accent at the right of the wordmark
+    draw.rectangle((end + 14, m * 0.62 + name_size * 0.28, end + 14 + 46, m * 0.62 + name_size * 0.28 + 8), fill=ACCENT)
 
     f_tag = font(BODY_SEMI, 22 if big else 17)
     draw_tracked(draw, (m, m * 0.62 + name_size * 1.12), ctx.tagline.upper(), f_tag, SILVER_DIM, 2.2 if big else 1.6)
 
     rule_y = int(m * 0.62 + name_size * 1.12 + (44 if big else 34))
-    draw.rectangle((m, rule_y, m + (140 if big else 90), rule_y + 5), fill=RED)
+    draw.rectangle((m, rule_y, m + (140 if big else 90), rule_y + 5), fill=ACCENT)
     draw.rectangle((m + (150 if big else 100), rule_y + 2, fmt.width - m, rule_y + 3), fill=(70, 74, 82))
     return rule_y + 5
 
 
 def _cta_band(draw: ImageDraw.ImageDraw, ctx: CardContext, fmt: Format, m: int, height: int) -> None:
     y0 = fmt.height - height
-    draw.rectangle((0, y0, fmt.width, fmt.height), fill=RED)
-    draw.rectangle((0, y0, fmt.width, y0 + 6), fill=RED_DEEP)
+    draw.rectangle((0, y0, fmt.width, fmt.height), fill=ACCENT)
+    draw.rectangle((0, y0, fmt.width, y0 + 6), fill=ACCENT_DEEP)
 
     big = fmt.key == "story"
     label_size = 30 if big else 22
@@ -503,19 +504,19 @@ def _cta_band(draw: ImageDraw.ImageDraw, ctx: CardContext, fmt: Format, m: int, 
     cx = m + 26
     cy = y0 + height / 2
     r = 30 if big else 22
-    draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(255, 255, 255), width=4)
-    draw.polygon([(cx - 10, cy + r - 6), (cx + 2, cy + r - 6), (cx - 8, cy + r + 10)], fill=RED)
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=INK, width=4)
+    draw.polygon([(cx - 10, cy + r - 6), (cx + 2, cy + r - 6), (cx - 8, cy + r + 10)], fill=ACCENT)
 
     text_x = m + (86 if big else 62)
-    draw_tracked(draw, (text_x, y0 + (34 if big else 22)), label, f_label, (255, 240, 240), 2.6)
-    draw.text((text_x - 2, y0 + (34 if big else 22) + label_size * 1.05), ctx.phone, font=f_phone, fill=(255, 255, 255))
+    draw_tracked(draw, (text_x, y0 + (34 if big else 22)), label, f_label, INK, 2.6)
+    draw.text((text_x - 2, y0 + (34 if big else 22) + label_size * 1.05), ctx.phone, font=f_phone, fill=INK)
 
     f_loc = font(BODY_MED, 20 if big else 16)
     draw.text(
         (fmt.width - m, y0 + height - (26 if big else 18)),
         ctx.location.upper(),
         font=f_loc,
-        fill=(255, 226, 226),
+        fill=INK,
         anchor="rs",
     )
 
@@ -592,7 +593,7 @@ def _draw_fitment(
         for wrapped in wrap(draw, line, f, max_width - 30):
             if drawn >= max_lines:
                 break
-            draw.rectangle((x, y + size * 0.42, x + 12, y + size * 0.42 + 3), fill=RED)
+            draw.rectangle((x, y + size * 0.42, x + 12, y + size * 0.42 + 3), fill=ACCENT)
             draw.text((x + 24, y), wrapped, font=f, fill=SILVER_DIM)
             y += size * 1.28
             drawn += 1
@@ -626,9 +627,9 @@ def _number_pill(
         fill=(38, 41, 47), outline=(72, 78, 88), width=2,
     )
     draw.rounded_rectangle(
-        (x, box_y0, x + tag_w + 6, box_y1), radius=(box_y1 - box_y0) / 2, fill=RED
+        (x, box_y0, x + tag_w + 6, box_y1), radius=(box_y1 - box_y0) / 2, fill=ACCENT
     )
-    draw_tracked(draw, (x + 14, box_y0 + (box_y1 - box_y0 - f_tag.size) / 2 - 2), "OEM", f_tag, (255, 255, 255), 2.0)
+    draw_tracked(draw, (x + 14, box_y0 + (box_y1 - box_y0 - f_tag.size) / 2 - 2), "OEM", f_tag, INK, 2.0)
     draw.text((x + tag_w + 22, box_y0 + (box_y1 - box_y0 - f_num.size) / 2 - 6), number, font=f_num, fill=SILVER)
     return box_y1
 

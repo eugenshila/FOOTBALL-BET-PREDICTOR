@@ -359,6 +359,7 @@ def import_csv(
     update_existing: bool = True,
     default_currency: str = "KES",
     default_verified: bool = False,
+    defer_images: bool = False,
     path: Path | None = None,
 ) -> ImportReport:
     """Import a CSV stock list.
@@ -495,6 +496,9 @@ def import_csv(
                 oem_part_number=payload.oem_part_number, message=message,
             ))
             continue
+
+        if defer_images:
+            payload.image_path = ""  # Browser workflow requires per-row photo approval.
 
         # Match on the OEM number when we have one; otherwise fall back to the
         # name so rows without a part number do not duplicate on every re-import.

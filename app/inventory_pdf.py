@@ -29,7 +29,7 @@ from .config import BASE_DIR, UPLOAD_DIR
 from .models import InventoryPart
 
 _NAVY = colors.HexColor("#15243a")
-_RED = colors.HexColor("#d82b35")
+_ACCENT = colors.HexColor("#edc66b")
 _MUTED = colors.HexColor("#64748b")
 _EDGE = colors.HexColor("#d8dee8")
 _PALE = colors.HexColor("#f3f6fa")
@@ -198,7 +198,7 @@ def build_inventory_pdf(parts: Iterable[InventoryPart]) -> bytes:
                 [
                     ("BACKGROUND", (0, 0), (-1, -1), colors.white),
                     ("BOX", (0, 0), (-1, -1), 0.7, _EDGE),
-                    ("LINEBEFORE", (1, 0), (1, 0), 1.4, _RED),
+                    ("LINEBEFORE", (1, 0), (1, 0), 1.4, _ACCENT),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("LEFTPADDING", (0, 0), (0, 0), 2 * mm),
                     ("RIGHTPADDING", (0, 0), (0, 0), 2 * mm),
