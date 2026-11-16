@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 _TMP = Path(tempfile.mkdtemp(prefix="partsid-tests-"))
+os.environ["LOCAL_AUTH_DB"] = str(_TMP / "local-auth.db")
 os.environ.setdefault("APP_DB_PATH", str(_TMP / "test.db"))
 os.environ.setdefault("APP_UPLOAD_DIR", str(_TMP / "uploads"))
 os.environ.setdefault("APP_EXPORT_DIR", str(_TMP / "exports"))
@@ -51,7 +52,12 @@ def dialect() -> str:
 
 @pytest.fixture(scope="session")
 def client():
+    from app import auth
+
+    auth.save_user("suite@example.test", "test-only-local-password")
     with TestClient(app) as test_client:
+        response = test_client.post("/api/auth/signin", json={"email": "suite@example.test", "password": "test-only-local-password"})
+        assert response.status_code == 200
         yield test_client
 
 

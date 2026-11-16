@@ -1,4 +1,4 @@
-/* Parts ID Engine — vanilla JS, no build step, no external calls. */
+/* Verifix — vanilla JS, no build step, no external calls. */
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -7,6 +7,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const state = {
   config: null,
   parts: [],
+  stockFilter: "all",
   selectedFile: null,
   lastScan: null,
   currentPart: null,
@@ -117,7 +118,10 @@ async function api(path, options = {}) {
     headers: options.body instanceof FormData ? {} : { "Content-Type": "application/json" },
     ...options,
   });
-  if (response.status === 401) { location.assign("/login"); throw new Error("Your session has expired. Please sign in again."); }
+  if (response.status === 401) {
+    window.location.assign("/login");
+    throw new Error("Please sign in to your local account.");
+  }
   if (response.status === 204) return null;
   const text = await response.text();
   let data = null;
@@ -184,6 +188,7 @@ async function boot() {
     populateShopSettings(config);
     renderSocialLinks($("#studio-social-links"), config.social_links);
     $("#shop-name").textContent = config.shop_name;
+    document.title = `${config.shop_name} — Parts workspace`;
     $("#shop-tagline").textContent = config.tagline;
     $("#max-mb").textContent = config.max_upload_mb;
     renderProviderBadge(health);
@@ -213,6 +218,12 @@ function renderProviderBadge(health) {
 function renderStats(stats) {
   $("#stat-pill").textContent =
     `${stats.parts} parts · ${stats.units} units · ${money(stats.inventory_value, state.config?.currency)}`;
+  $("#metric-parts").textContent = stats.parts.toLocaleString("en-KE");
+  $("#metric-units").textContent = stats.units.toLocaleString("en-KE");
+  $("#metric-value").textContent = money(stats.inventory_value, state.config?.currency);
+  $("#metric-out").textContent = stats.out_of_stock.toLocaleString("en-KE");
+  $("#metric-out").closest(".stat-card").classList.toggle("needs-stock", stats.out_of_stock > 0);
+  $("#metric-out-note").textContent = stats.out_of_stock ? "Parts ready for a restock" : "No empty stock lines";
 }
 
 async function loadDemoImages() {
@@ -392,7 +403,7 @@ function renderMatch(result) {
   badge.className = `badge ${part.verified ? "ok" : "warn"}`;
   badge.textContent = part.verified ? "verified stock record" : "unverified record";
   const imageUrl = part.image_path
-    ? (part.image_path.startsWith("assets/seed/") ? `/api/demo-image/${part.image_path.split("/").pop().replace(/\.\w+$/, "")}` : part.image_path)
+    ? mediaUrl(part.image_path)
     : (result.image_path ? mediaUrl(result.image_path) : "");
 
   body.innerHTML = `
@@ -445,15 +456,15 @@ function renderMatch(result) {
 
 function mediaUrl(path) {
   if (!path) return "";
-  const raw = String(path).trim();
-  if (/^https?:\/\//i.test(raw)) return raw;
-  const normalized = raw.replace(/\\/g, "/");
-  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("//")) return "";
-  if (normalized.startsWith("/")) return normalized;
-  if (normalized.startsWith("assets/seed/")) return `/api/demo-image/${normalized.split("/").pop().replace(/\.\w+$/, "")}`;
+  if (/^https?:\/\//i.test(path)) return path;
+  const normalized = String(path).replace(/\\/g, "/");
+  if (normalized.startsWith("/media/") || normalized.startsWith("/api/demo-image/")) return normalized;
   const file = normalized.split("/").pop();
-  if (normalized.startsWith("uploads/")) return `/media/uploads/${file}`;
-  if (normalized.startsWith("exports/")) return `/media/exports/${file}`;
+  if (normalized.startsWith("assets/seed/") || normalized.includes("/assets/seed/")) {
+    return `/api/demo-image/${encodeURIComponent(file.replace(/\.\w+$/, ""))}`;
+  }
+  if (normalized.startsWith("uploads/") || normalized.includes("/uploads/")) return `/media/uploads/${encodeURIComponent(file)}`;
+  if (normalized.startsWith("exports/") || normalized.includes("/exports/")) return `/media/exports/${encodeURIComponent(file)}`;
   return "";
 }
 
@@ -490,7 +501,13 @@ async function loadParts(query = "") {
 
 function renderParts() {
   const body = $("#parts-body");
-  const parts = [...state.parts];
+  const parts = state.parts.filter((part) => {
+    if (state.stockFilter === "in") return part.quantity > 0;
+    if (state.stockFilter === "out") return part.quantity <= 0;
+    if (state.stockFilter === "review") return !part.verified;
+    return true;
+  });
+  $("#inventory-count").textContent = parts.length;
   if (state.receivedSort) {
     parts.sort((a, b) => {
       const aDate = a.last_received_at ? Date.parse(a.last_received_at) : null;
@@ -513,10 +530,11 @@ function renderParts() {
       ? new Date(part.last_received_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
       : "—";
     return `<tr data-id="${part.id}">
-      <td>
-        <div class="part-name">${escapeHtml(part.part_name)}</div>
-        <div class="part-sub">${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}</div>
-      </td>
+      <td><div class="part-cell">
+        ${mediaUrl(part.image_path) ? `<img class="part-thumb" src="${escapeHtml(mediaUrl(part.image_path))}" alt="" loading="lazy" />` : '<span class="part-placeholder" aria-hidden="true">◇</span>'}
+        <div><div class="part-name">${escapeHtml(part.part_name)}</div>
+        <div class="part-sub">${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}</div></div>
+      </div></td>
       <td class="mono">${escapeHtml(part.oem_part_number || "—")}</td>
       <td>
         <input class="part-photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${part.id}" hidden />
@@ -531,6 +549,7 @@ function renderParts() {
       <td class="num">
         <button class="btn tiny" data-card="${part.id}" title="Generate promo cards">Cards</button>
         <button class="btn tiny" data-edit="${part.id}" title="Edit">Edit</button>
+        <button class="btn tiny" data-images="${part.id}" title="Review image candidates">Photos</button>
       </td>
     </tr>`;
   }).join("");
@@ -564,6 +583,11 @@ function renderParts() {
     event.stopPropagation();
     const record = state.parts.find((p) => p.id === Number(button.dataset.edit));
     if (record) openDrawer(record);
+  }));
+  $$("[data-images]", body).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const part = state.parts.find((p) => p.id === Number(button.dataset.images));
+    if (part) showImageReview([{ part_id: part.id, part_name: part.part_name, oem_part_number: part.oem_part_number }]);
   }));
   $$("tr[data-id]", body).forEach((row) => row.addEventListener("click", () => {
     const record = state.parts.find((p) => p.id === Number(row.dataset.id));
@@ -702,14 +726,24 @@ async function savePart(event) {
 
 /* ── studio ───────────────────────────────────────────────── */
 function populateStudioSelect() {
-  const selected = state.parts.find((part) => String(part.id) === $("#studio-part").value)
-    || state.parts[0];
-  if (selected) setStudioPart(selected);
+  const select = $("#studio-part");
+  const previous = select.value;
+  select.innerHTML = state.parts.map((part) =>
+    `<option value="${part.id}">${escapeHtml(part.part_name)} · ${escapeHtml(part.oem_part_number || "no OEM")}</option>`
+  ).join("");
+  if (state.parts.some((part) => String(part.id) === previous)) select.value = previous;
 }
 
 function setStudioPart(part) {
   if (!state.parts.some((item) => item.id === part.id)) state.parts.unshift(part);
-  $("#studio-part").value = String(part.id);
+  const select = $("#studio-part");
+  if (![...select.options].some((option) => option.value === String(part.id))) {
+    const option = document.createElement("option");
+    option.value = String(part.id);
+    option.textContent = `${part.part_name} · ${part.oem_part_number || "no OEM"}`;
+    select.append(option);
+  }
+  select.value = String(part.id);
   $("#studio-selected-part").textContent = `${part.part_name} · ${part.oem_part_number || "no OEM number"}`;
   $("#studio-search-results").hidden = true;
   $("#studio-search-results").innerHTML = "";
@@ -811,8 +845,12 @@ let pendingUpdateExisting = false;
 let stockImportInProgress = false;
 
 async function sendStockFile(file, dryRun, updateExisting = false) {
-  if (!dryRun && stockImportInProgress) return;
-  if (!dryRun) stockImportInProgress = true;
+  if (stockImportInProgress) return;
+  if (!/\.(csv|zip|xlsx|pdf)$/i.test(file.name)) { toast("Choose a CSV, ZIP, Excel or PDF stock file", true); return; }
+  switchView("inventory");
+  stockImportInProgress = true;
+  pendingStockFile = null;
+  $("#import-actions").innerHTML = "";
   const block = $("#import-block");
   const summary = $("#import-summary");
   block.hidden = false;
@@ -822,7 +860,7 @@ async function sendStockFile(file, dryRun, updateExisting = false) {
   form.append("file", file);
 
   try {
-    const query = `?dry_run=${dryRun}&update_existing=${updateExisting}`;
+    const query = `?dry_run=${dryRun}&update_existing=${updateExisting}&review_images=true`;
     const result = await api(`/api/inventory/import${query}`, { method: "POST", body: form });
     renderImportSummary(result, file, dryRun, updateExisting);
     if (!dryRun) {
@@ -830,6 +868,7 @@ async function sendStockFile(file, dryRun, updateExisting = false) {
       await loadParts($("#search").value);
       populateStudioSelect();
       toast(`Imported ${result.created} part(s)`);
+      showImageReview(result.results.filter((r) => r.part_id));
     } else {
       pendingStockFile = file;
       pendingUpdateExisting = updateExisting;
@@ -839,7 +878,7 @@ async function sendStockFile(file, dryRun, updateExisting = false) {
     const applyButton = $("#btn-apply-import");
     if (applyButton) { applyButton.disabled = false; applyButton.textContent = "Apply import"; }
   } finally {
-    if (!dryRun) stockImportInProgress = false;
+    stockImportInProgress = false;
   }
 }
 
@@ -853,7 +892,8 @@ function renderImportSummary(result, file, dryRun, mergeMatches) {
     `<div class="${cls}"><strong>${value}</strong>${label}</div>`;
 
   summary.innerHTML = `
-    <p class="muted small">${escapeHtml(file.name)} · ${result.rows_total} rows read${dryRun ? " · dry run, nothing written yet" : ""}</p>
+    <p class="muted small">${escapeHtml(file.name)} · ${result.rows_total} rows read${dryRun ? " · dry run, nothing written yet. Photo paths are deferred for approval" : ""}</p>
+    ${result.bundle ? `<p class="status">${result.bundle.images_matched} images matched by part number · ${result.bundle.images_missing} rows without an image · ${result.bundle.unused_images.length} unused images. Photos require individual approval.${result.bundle.test_only ? " TEST PACKAGE: these images are labelled placeholders, not part photos." : ""}</p>` : ""}
     <div class="import-stats">
       ${stat("new parts", result.created, "good")}
       ${stat(mergeMatches ? "matched · qty added" : "updated", result.updated)}
@@ -861,13 +901,15 @@ function renderImportSummary(result, file, dryRun, mergeMatches) {
       ${stat("problems", result.errors, result.errors ? "bad" : "")}
     </div>
     ${mergeMatches ? '<p class="import-cols">Matching OEM or alternate numbers use the existing part record; uploaded quantities are added to current stock. The Excel file is not changed.</p>' : ""}
-    ${result.images_found ? `<p class="import-cols">${dryRun ? `${result.images_found} embedded photo(s) found` : `${result.images_attached || 0} photo(s) attached`}</p>` : ""}
+    ${result.images_found ? `<p class="import-cols">${dryRun ? `${result.images_found} embedded photo(s) found` : `${result.images_pending || 0} photo(s) awaiting individual approval`}</p>` : ""}
     ${aliasRows.length ? `<p class="import-cols">${aliasRows.length} row(s) whose OEM number is listed as an alternate/superseded number were kept as references and not added as separate parts: ${aliasRows.slice(0, 8).map((row) => `row ${row.row} · ${escapeHtml(row.oem_part_number)}`).join(", ")}${aliasRows.length > 8 ? ", …" : ""}</p>` : ""}
     ${result.problems.length ? `<ul class="import-problems">${result.problems.map((p) => `<li>row ${p.row}: ${escapeHtml(p.message)}</li>`).join("")}</ul>` : ""}
     <p class="import-cols">Columns mapped: ${Object.entries(result.columns_mapped).map(([from, to]) => `${escapeHtml(from)} → ${escapeHtml(to)}`).join(", ") || "none"}${result.ignored_columns.length ? ` · ignored: ${result.ignored_columns.map(escapeHtml).join(", ")}` : ""}</p>`;
 
+  summary.insertAdjacentHTML("beforeend", `<div class="table-wrap"><table class="table"><thead><tr><th>Row</th><th>Part / OEM</th><th>Result</th></tr></thead><tbody>${result.results.map((r) => `<tr><td>${r.row}</td><td>${escapeHtml(r.part_name)}<div class="part-sub">${escapeHtml(r.oem_part_number)}</div>${r.image_filename ? `<div class="part-sub">Photo: ${escapeHtml(r.image_filename)}</div>` : ""}</td><td>${escapeHtml(r.status)}${r.message ? ` · ${escapeHtml(r.message)}` : ""}</td></tr>`).join("")}</tbody></table></div>${result.rows_total > result.results.length ? '<p class="muted small">Showing the first 500 results. Use Photos in inventory to review other rows.</p>' : ""}`);
+
   actions.innerHTML = dryRun
-    ? `<button class="btn primary small-btn" id="btn-apply-import">Apply import</button>
+    ? `<button class="btn primary small-btn" id="btn-apply-import" ${result.created + result.updated === 0 && !(result.bundle?.images_matched && result.skipped) ? "disabled" : ""}>Apply import</button>
        <button class="btn ghost small-btn" id="btn-cancel-import">Cancel</button>`
     : `<button class="btn ghost small-btn" id="btn-cancel-import">Dismiss</button>`;
 
@@ -887,6 +929,53 @@ function renderImportSummary(result, file, dryRun, mergeMatches) {
   });
 }
 
+/* Image choices never write anything until that row's Approve button is clicked. */
+function showImageReview(rows) {
+  const block = $("#image-review");
+  const unique = [...new Map(rows.map((r) => [r.part_id, r])).values()];
+  block.hidden = unique.length === 0;
+  const container = $("#image-review-rows");
+  container.innerHTML = unique.map((r) => `<div class="review-row" data-review="${r.part_id}">
+    <strong>${escapeHtml(r.part_name)}</strong> <span class="muted small">${escapeHtml(r.oem_part_number || "No OEM")}</span>
+    <div class="row gap wrap mt"><button type="button" class="btn small-btn" data-suggest="${r.part_id}">Find local candidates</button>
+    <button type="button" class="btn ghost small-btn" data-skip>Skip / keep current photo</button></div>
+    <div class="review-candidates"></div><p class="status" role="status"></p></div>`).join("");
+  $$("[data-skip]", container).forEach((button) => button.addEventListener("click", () => {
+    const row = button.closest(".review-row");
+    $(".review-candidates", row).innerHTML = "";
+    $(".status", row).textContent = "Skipped. Current photo unchanged.";
+  }));
+  $$("[data-suggest]", container).forEach((button) => button.addEventListener("click", async () => {
+    const row = button.closest(".review-row");
+    const output = $(".review-candidates", row);
+    const status = $(".status", row);
+    button.disabled = true;
+    status.textContent = "Looking in the local catalogue…";
+    try {
+      const result = await api(`/api/parts/${button.dataset.suggest}/image-candidates`);
+      output.innerHTML = result.candidates.map((c) => `<div class="review-candidate">
+        <img src="${escapeHtml(c.image_url)}" alt="${escapeHtml(c.part_name)} candidate" loading="lazy" />
+        <p>${escapeHtml(c.part_name)}<br />${escapeHtml(c.oem_part_number || "No OEM")}<br />${escapeHtml(c.reason)}</p>
+        <button class="btn primary small-btn" type="button" data-approve="${escapeHtml(c.candidate_id)}">Approve this photo</button></div>`).join("");
+      status.textContent = result.candidates.length ? "Suggestions only. Approve a photo or skip this row." : "No local candidates. Keep this row without a photo, or add a photo via Edit.";
+      $$("[data-approve]", output).forEach((approve) => approve.addEventListener("click", async () => {
+        const controls = $$("button", row);
+        controls.forEach((control) => { control.disabled = true; });
+        try {
+          await api(`/api/parts/${button.dataset.suggest}/image-approval`, {
+            method: "POST", body: JSON.stringify({ candidate_id: approve.dataset.approve }),
+          });
+          output.innerHTML = "";
+          status.textContent = "Photo approved and saved. OEM verification unchanged.";
+          await loadParts($("#search").value);
+        } catch (error) { status.textContent = error.message; }
+        finally { controls.forEach((control) => { control.disabled = false; }); }
+      }));
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  }));
+}
+
 function chooseStockFile(file) {
   if (file) sendStockFile(file, true, $("#import-update-existing").checked);
 }
@@ -894,7 +983,7 @@ function chooseStockFile(file) {
 function openImportPanel() {
   const block = $("#import-block");
   block.hidden = false;
-  block.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  block.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
 }
 
 /* ── navigation ───────────────────────────────────────────── */
@@ -912,7 +1001,23 @@ async function loadVerificationSummary() {
 }
 
 function switchView(name) {
-  $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
+  $$(".tab").forEach((tab) => {
+    const selected = tab.dataset.view === name;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  });
+  const descriptions = {
+    identify: ["Identify a part", "Start with a photo. Find the details that matter.", "PHOTO → REVIEW → STOCK"],
+    inventory: ["Your inventory", "Every OEM number, shelf and stock level. In one place.", "FIND → VERIFY → ORGANISE"],
+    reports: ["Reports", "Verification and inventory exports for your shop.", "REVIEW → EXPORT"],
+    settings: ["Shop settings", "Your business details and public social profiles.", "EDIT → SAVE"],
+    studio: ["Promo studio", "Turn verified stock into something worth sharing.", "CHOOSE → CREATE → SHARE"],
+  };
+  const [title, description, workflow] = descriptions[name] || descriptions.identify;
+  $("#workspace-title").textContent = title;
+  $("#workspace-description").textContent = description;
+  $("#workspace-step").textContent = workflow;
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === `view-${name}`));
   if (name === "inventory") loadParts($("#search").value);
   if (name === "reports") loadVerificationSummary();
@@ -922,11 +1027,62 @@ function switchView(name) {
 
 function wireUi() {
   $$(".tab").forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+  const nav = $(".nav-items");
+  const setOrientation = () => nav.setAttribute("aria-orientation", window.innerWidth <= 680 ? "horizontal" : "vertical");
+  setOrientation();
+  window.addEventListener("resize", setOrientation);
+  nav.addEventListener("keydown", (event) => {
+    const tabs = $$(".tab", nav);
+    const index = tabs.indexOf(document.activeElement);
+    if (index < 0) return;
+    const vertical = nav.getAttribute("aria-orientation") === "vertical";
+    const nextKey = vertical ? "ArrowDown" : "ArrowRight";
+    const previousKey = vertical ? "ArrowUp" : "ArrowLeft";
+    let next;
+    if (event.key === nextKey) next = (index + 1) % tabs.length;
+    else if (event.key === previousKey) next = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    if (next === undefined) return;
+    event.preventDefault();
+    switchView(tabs[next].dataset.view);
+    tabs[next].focus();
+  });
+  $$("[data-stock-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.stockFilter = button.dataset.stockFilter;
+    $$("[data-stock-filter]").forEach((filter) => {
+      const selected = filter === button;
+      filter.classList.toggle("active", selected);
+      filter.setAttribute("aria-pressed", String(selected));
+    });
+    renderParts();
+  }));
+  $("#btn-signout").addEventListener("click", async () => {
+    try {
+      await api("/api/auth/signout", { method: "POST" });
+      window.location.assign("/login");
+    } catch (error) { toast(error.message, true); }
+  });
   $("#shop-settings-form").addEventListener("submit", saveShopSettings);
   $("#part-form").addEventListener("submit", savePart);
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
   $("#btn-new-part").addEventListener("click", () => openDrawer({}));
+  $("#csv-dropzone").addEventListener("click", () => $("#csv-input").click());
+  const csvZone = $("#csv-dropzone");
+  ["dragenter", "dragover"].forEach((name) => csvZone.addEventListener(name, (event) => {
+    event.preventDefault();
+    csvZone.classList.add("dragover");
+  }));
+  ["dragleave", "drop"].forEach((name) => csvZone.addEventListener(name, (event) => {
+    event.preventDefault();
+    csvZone.classList.remove("dragover");
+  }));
+  csvZone.addEventListener("drop", (event) => {
+    const file = event.dataTransfer?.files[0];
+    if (file) chooseStockFile(file);
+  });
+  $("#close-image-review").addEventListener("click", () => { $("#image-review").hidden = true; });
   $("#btn-import").addEventListener("click", openImportPanel);
   $("#btn-close-import").addEventListener("click", () => { $("#import-block").hidden = true; });
   $("#btn-pick-stock-file").addEventListener("click", (event) => {
@@ -957,6 +1113,10 @@ function wireUi() {
     if (files.length > 1) { toast("Choose one stock file at a time", true); return; }
     chooseStockFile(files[0]);
   });
+  $("#studio-part").addEventListener("change", () => {
+    const part = state.parts.find((item) => String(item.id) === $("#studio-part").value);
+    if (part) setStudioPart(part);
+  });
   $("#btn-generate").addEventListener("click", generateCards);
   $("#btn-search-part").addEventListener("click", searchStudioParts);
   $("#studio-search").addEventListener("keydown", (event) => {
@@ -979,7 +1139,4 @@ function wireUi() {
 
 wireDropzone();
 wireUi();
-$("#btn-signout").addEventListener("click", async () => {
-  try { await fetch("/api/auth/signout", { method: "POST" }); } finally { location.assign("/login"); }
-});
 boot();

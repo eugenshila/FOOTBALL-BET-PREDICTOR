@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import csv
 import io
 import logging
 import os
@@ -21,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import auth, cards, db, importers, inventory_pdf, links, shop_profile, storage, stock_files, vision
+from . import auth, cards, db, image_review, importers, inventory_pdf, links, shop_profile, stock_bundle, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -32,6 +31,7 @@ from .models import (
     IdentificationReport,
     IdentifyResponse,
     InventoryPart,
+    ImageApproval,
     PartCreate,
     PartUpdate,
     ShopProfileUpdate,
@@ -65,7 +65,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="Automotive Spare Parts ID Engine",
+    title="Verifix — Parts & Inventory",
     version="1.0.0",
     description=(
         "Identify automotive components from photos, keep warehouse/bin inventory, "
@@ -73,8 +73,6 @@ app = FastAPI(
     ),
 )
 
-app.include_router(auth.router)
-app.middleware("http")(auth.guard)
 # Preview hosts are proxied under *.e2b.app, so keep CORS permissive but explicit.
 app.add_middleware(
     CORSMiddleware,
@@ -85,6 +83,12 @@ app.add_middleware(
 )
 
 
+# Local authentication: no Supabase calls, no public self-registration.
+# The login module also works as a drop-in for the auth-enabled Windows version.
+app.middleware("http")(auth.guard)
+app.include_router(auth.router)
+
+
 # --- static media ----------------------------------------------------------
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,11 +97,6 @@ if (WEB_DIR / "static").exists():
 app.mount("/assets", StaticFiles(directory=ASSET_DIR), name="assets")
 app.mount("/media/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/media/exports", StaticFiles(directory=EXPORT_DIR), name="exports")
-
-
-@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page() -> HTMLResponse:
-    return HTMLResponse((WEB_DIR / "login.html").read_text(encoding="utf-8"))
 
 
 @app.head("/", include_in_schema=False)
@@ -221,6 +220,27 @@ def patch_part(part_id: int, payload: PartUpdate) -> InventoryPart:
     if part is None:
         raise HTTPException(status_code=404, detail="part not found")
     return part
+
+
+@app.get("/api/parts/{part_id}/image-candidates")
+def image_candidates(part_id: int) -> dict:
+    part = get_part(part_id)
+    return {"part_id": part_id, "candidates": image_review.candidates_for(part),
+            "source": "local catalogue", "requires_approval": True}
+
+
+@app.post("/api/parts/{part_id}/image-approval", response_model=InventoryPart)
+def approve_image(part_id: int, payload: ImageApproval) -> InventoryPart:
+    part = get_part(part_id)
+    candidate = next((c for c in image_review.candidates_for(part)
+                      if c["candidate_id"] == payload.candidate_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=409, detail="Candidate is no longer available. Refresh the image review.")
+    # Deliberately leave OEM, fitment, quantity and verification untouched.
+    updated = db.update_part(part_id, PartUpdate(image_path=candidate["image_path"]))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="part not found")
+    return updated
 
 
 @app.post("/api/parts/{part_id}/image", response_model=InventoryPart)
@@ -438,21 +458,24 @@ def _request_origin(request: Request) -> str:
 async def import_parts(
     file: UploadFile = File(...),
     dry_run: bool = Query(True, description="Parse and report without writing anything"),
-    update_existing: bool = Query(True, description="Merge matching OEM/alternate numbers and add imported quantities"),
+    update_existing: bool = Query(False, description="Merge matching OEM/alternate numbers and add imported quantities when explicitly enabled"),
+    review_images: bool = Query(False, description="Defer photo paths for individual approval"),
     mark_verified: bool = Query(
         False, description="Treat the file as the shop's own verified records"
     ),
 ) -> dict:
-    raw = await file.read()
+    filename = (file.filename or "").lower()
+    is_bundle = filename.endswith(".zip")
+    limit = stock_bundle.MAX_UPLOAD if is_bundle else (64 if filename.endswith((".xlsx", ".pdf")) else 8) * 1024 * 1024
+    raw = await file.read(limit + 1)
     if not raw:
         raise HTTPException(status_code=422, detail="empty file")
-    if len(raw) > 64 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Stock file larger than 64 MB")
-
-    filename = (file.filename or "").lower()
+    if len(raw) > limit:
+        raise HTTPException(status_code=413, detail=f"Stock file larger than {limit // (1024 * 1024)} MB")
+    if filename and not filename.endswith((".csv", ".zip", ".xlsx", ".pdf")):
+        raise HTTPException(status_code=415, detail="Upload CSV, stock ZIP, Excel .xlsx, or text-based PDF")
+    bundle = stock_bundle.read_bundle(raw) if is_bundle else None
     upload = None
-    if filename and not filename.endswith((".csv", ".xlsx", ".pdf")):
-        raise HTTPException(status_code=415, detail="Upload a CSV, Excel .xlsx, or text-based PDF stock list")
     try:
         if filename.endswith(".xlsx"):
             upload = stock_files.parse_xlsx(raw)
@@ -460,66 +483,51 @@ async def import_parts(
             upload = stock_files.parse_pdf(raw)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    csv_raw = upload.csv_bytes if upload else raw
-    saved_photos: dict[int, Path] = {}
-    if upload and upload.photos and not dry_run:
-        try:
-            rows = list(csv.reader(io.StringIO(csv_raw.decode("utf-8-sig"))))
-            photo_column = rows[0].index("Photo")
-            oem_column = rows[0].index("OEM Part Number")
-            photo_oems: set[str] = set()
-            for row_number in upload.photos:
-                oem = rows[row_number - 1][oem_column].strip().upper()
-                if oem and oem in photo_oems:
-                    raise ValueError(f"More than one embedded photo was supplied for OEM {oem}; keep one photo per part number.")
-                if oem:
-                    photo_oems.add(oem)
-            for row_number, (image_name, image_raw) in upload.photos.items():
-                path, _ = _store_upload(image_raw, image_name)
-                rows[row_number - 1][photo_column] = f"uploads/{path.name}"
-                saved_photos[row_number] = path
-            output = io.StringIO(newline="")
-            csv.writer(output).writerows(rows)
-            csv_raw = output.getvalue().encode("utf-8-sig")
-        except Exception as exc:  # noqa: BLE001 - clean staged images on every attachment failure
-            for path in saved_photos.values():
-                path.unlink(missing_ok=True)
-            if isinstance(exc, HTTPException):
-                raise
-            raise HTTPException(status_code=422, detail=f"Could not attach embedded Excel photos: {exc}") from exc
-
+    csv_raw = bundle.csv_text if bundle else upload.csv_bytes if upload else raw
+    # Embedded workbook/ZIP photos are candidates, never silently attached.
+    defer_images = review_images or is_bundle or bool(upload and upload.photos)
+    if (bundle or upload) and not dry_run:
+        preview = importers.import_csv(csv_raw, dry_run=True, update_existing=update_existing,
+                                       default_currency=settings.currency, defer_images=defer_images)
+        if preview.errors:
+            raise HTTPException(status_code=422, detail="Fix stock file row errors before applying")
     report = importers.import_csv(
-        csv_raw,
-        dry_run=dry_run,
-        update_existing=update_existing,
+        csv_raw, dry_run=dry_run, update_existing=update_existing,
         default_currency=settings.currency,
-        default_verified=mark_verified,
+        default_verified=False if bundle else mark_verified,
+        defer_images=defer_images,
     )
-    retained_rows: set[int] = set()
-    if saved_photos:
-        retained_rows = {
-            result.row for result in report.results
-            if result.status in {"created", "updated"}
-        }
-        for row_number, path in saved_photos.items():
-            if row_number not in retained_rows:
-                path.unlink(missing_ok=True)
     payload = report.summary()
-    payload["results"] = [
-        {
-            "row": r.row,
-            "status": r.status,
-            "part_name": r.part_name,
-            "oem_part_number": r.oem_part_number,
-            "part_id": r.part_id,
-            "message": r.message,
+    images_pending = 0
+    if not dry_run:
+        for result in report.results:
+            photo = None
+            if bundle and result.row in bundle.images:
+                photo = (bundle.image_names[result.row], bundle.images[result.row])
+            elif upload and result.row in upload.photos:
+                photo = upload.photos[result.row]
+            if photo and result.part_id and result.status in {"created", "updated", "skipped"}:
+                part = db.get_part(result.part_id)
+                if part is not None:
+                    path, _ = _store_upload(photo[1], photo[0])
+                    image_review.register_upload(part, str(path), test_only=bool(bundle and bundle.test_only))
+                    images_pending += 1
+    if bundle:
+        payload["bundle"] = {
+            "images_matched": len(bundle.images), "images_missing": bundle.rows - len(bundle.images),
+            "unused_images": bundle.unused_images, "test_only": bundle.test_only,
+            "requires_approval": True,
         }
+    payload["results"] = [
+        {"row": r.row, "status": r.status, "part_name": r.part_name,
+         "oem_part_number": r.oem_part_number, "part_id": r.part_id, "message": r.message,
+         **({"image_filename": bundle.image_names.get(r.row, "")} if bundle else {})}
         for r in report.results[:500]
     ]
     payload["stats"] = db.stats()
     payload["images_found"] = len(upload.photos) if upload else 0
-    payload["images_attached"] = len(set(saved_photos) & retained_rows)
+    payload["images_attached"] = 0
+    payload["images_pending"] = images_pending
     return payload
 
 

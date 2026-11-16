@@ -47,8 +47,6 @@ DB_PATH = Path(os.getenv("APP_DB_PATH", DATA_DIR / "inventory.db"))
 # Empty -> SQLite at DB_PATH. Set to postgresql://user:pass@host:5432/dbname
 # to run the same app against PostgreSQL.
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -56,6 +54,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shop_name() -> str:
+    """Upgrade the former default brand without overwriting a custom shop name."""
+    name = os.getenv("SHOP_NAME", "").strip()
+    return "Verifix" if name.upper() in {"", "TRAIL VAULT", "VERIFIX"} else name
 
 
 @dataclass
@@ -71,8 +75,6 @@ class Settings:
     """
 
     database_url: str = field(default_factory=lambda: DATABASE_URL)
-    supabase_url: str = field(default_factory=lambda: SUPABASE_URL)
-    supabase_publishable_key: str = field(default_factory=lambda: SUPABASE_PUBLISHABLE_KEY)
     vision_provider: str = field(default_factory=lambda: os.getenv("VISION_PROVIDER", "auto").lower())
     vision_model: str = field(default_factory=lambda: os.getenv("VISION_MODEL", ""))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
@@ -93,8 +95,8 @@ class Settings:
     public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
 
     # Shop identity used on generated cards.
-    shop_name: str = field(default_factory=lambda: os.getenv("SHOP_NAME", "VERIFIX"))
-    shop_tagline: str = field(default_factory=lambda: os.getenv("SHOP_TAGLINE", "OEM & GENUINE SPARE PARTS"))
+    shop_name: str = field(default_factory=_shop_name)
+    shop_tagline: str = field(default_factory=lambda: os.getenv("SHOP_TAGLINE", "JEEP · MOPAR · GENUINE SPARES"))
     whatsapp_number: str = field(default_factory=lambda: os.getenv("WHATSAPP_NUMBER", "+254 700 000 000"))
     currency: str = field(default_factory=lambda: os.getenv("CURRENCY", "KES"))
     location: str = field(default_factory=lambda: os.getenv("SHOP_LOCATION", "Nairobi, Kenya"))
