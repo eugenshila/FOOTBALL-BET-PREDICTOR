@@ -12,19 +12,13 @@ const state = {
   lastScan: null,
   currentPart: null,
   receivedSort: 0,
-  view: "identify",
-  // Selected drawer photo recovered from a draft (file inputs cannot always be
-  // repopulated, so savePart() falls back to this when the input is empty).
-  partDraftFile: null,
+  account: null,
+  draft: null,
+  draftPhoto: null,
+  photoMissing: false,
+  photoStorageFailed: false,
+  photoSaving: false,
 };
-
-/* Local draft persistence (see drafts.js). Mobile browsers reload or kill
-   background tabs; these flags keep restores from re-saving or auto-submitting. */
-const drafts = window.VerifixDrafts || null;
-let suspendDraftCapture = false;   // programmatic fills must not look like typing
-let draftSavedState = false;       // a successful inventory save clears the draft
-let partDraftTimer = null;
-let flushPartDraftOnHide = false;
 
 /* ── tiny helpers ─────────────────────────────────────────── */
 const money = (amount, currency) => {
@@ -131,9 +125,6 @@ async function api(path, options = {}) {
     ...options,
   });
   if (response.status === 401) {
-    // An expired session is not an explicit logout: local drafts stay on the
-    // device (account-scoped) and return after signing in again. Only the
-    // Sign out button wipes them.
     window.location.assign("/login");
     throw new Error("Please sign in to your local account.");
   }
@@ -143,7 +134,9 @@ async function api(path, options = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
   if (!response.ok) {
     const detail = data && data.detail ? data.detail : `request failed (${response.status})`;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    const error = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -195,20 +188,12 @@ function renderMarkdown(markdown) {
 /* ── boot ─────────────────────────────────────────────────── */
 async function boot() {
   try {
-    // The session decides which account's local drafts may be read, so it is
-    // fetched before anything is restored.
-    const session = await api("/api/auth/session");
-    if (drafts) await drafts.setAccount(session.email || "");
-    const [config, health, stats] = await Promise.all([
-      api("/api/config"), api("/api/health"), api("/api/stats"),
+    const [config, health, stats, session] = await Promise.all([
+      api("/api/config"), api("/api/health"), api("/api/stats"), api("/api/auth/session"),
     ]);
     $("#auth-email").textContent = session.email || "";
+    state.account = session.authenticated && session.email ? session.email.toLowerCase() : null;
     state.config = config;
-    try {
-      restoreUiDraft();
-    } catch {
-      /* a corrupted UI draft must never break boot */
-    }
     populateShopSettings(config);
     renderSocialLinks($("#studio-social-links"), config.social_links);
     $("#shop-name").textContent = config.shop_name;
@@ -218,12 +203,10 @@ async function boot() {
     renderProviderBadge(health);
     renderStats(stats);
     await loadParts();
+    await restoreWorkspace();
+    await restoreScan();
     await loadDemoImages();
     populateStudioSelect();
-    // Drafts are restored last: the form never auto-submits, and the scan
-    // report is re-rendered locally instead of re-running identification.
-    try { restoreScanDraft(); } catch { /* corrupted scan draft → ignored */ }
-    try { restorePartDraft()?.catch?.(() => {}); } catch { /* corrupted form draft → ignored */ }
   } catch (error) {
     toast(`Could not reach the API: ${error.message}`, true);
   }
@@ -283,13 +266,8 @@ function autoDetectEnabled() {
   return Boolean(toggle && toggle.checked);
 }
 
-function selectFile(file, options = {}) {
+function selectFile(file) {
   state.selectedFile = file;
-  // Mirror the capture into IndexedDB so a mobile tab-kill does not lose the
-  // photo of a finished identification. Restores never re-save or re-identify.
-  if (drafts && drafts.draftsEnabled() && !options.restored && typeof file?.arrayBuffer === "function") {
-    drafts.putPhoto("identify", file).catch(() => {});
-  }
   const preview = $("#preview");
   preview.src = URL.createObjectURL(file);
   preview.hidden = false;
@@ -352,9 +330,6 @@ async function identify() {
     const result = await api("/api/identify", { method: "POST", body: form });
     if (token !== identifyToken) return; // a newer upload superseded this one
     state.lastScan = result;
-    if (drafts && drafts.draftsEnabled()) {
-      try { drafts.saveScan(result); } catch { /* storage full — the report still renders */ }
-    }
     renderReport(result);
     renderSources(result);
     renderMatch(result);
@@ -362,6 +337,8 @@ async function identify() {
     const conf = result.report.overall_confidence;
     const via = result.report.grounded ? `${result.report.provider} + web search` : result.report.provider;
     status.textContent = `Done — ${conf} confidence via ${via}.`;
+    saveScan();
+    keepScanPhoto(state.selectedFile);
     await loadParts();
     populateStudioSelect();
   } catch (error) {
@@ -430,7 +407,7 @@ function renderMatch(result) {
       <div class="row gap wrap mt">
         <button class="btn primary" id="btn-adopt-report">Add to inventory from this scan</button>
       </div>`;
-    $("#btn-adopt-report").addEventListener("click", () => openDrawer(prefillFromReport(result.report), { scanPrefill: true }));
+    $("#btn-adopt-report").addEventListener("click", () => openDrawer(prefillFromReport(result.report)));
     $$("[data-adopt]", body).forEach((button) =>
       button.addEventListener("click", () => openStudioFor(Number(button.dataset.adopt))));
     return;
@@ -660,118 +637,289 @@ $("#sort-received")?.addEventListener("click", () => {
   state.receivedSort = state.receivedSort === -1 ? 1 : -1;
   $("#sort-received").textContent = state.receivedSort === -1 ? "Date received ↓" : "Date received ↑";
   renderParts();
-  drafts?.saveUi({ receivedSort: state.receivedSort });
+  saveWorkspace();
 });
 
-/* ── drawer / form ────────────────────────────────────────── */
-/* The part form is mirrored into localStorage as fields change and the
-   selected photo into IndexedDB, so a mobile browser that reloads or kills
-   this tab after a detour to another app does not destroy unfinished work.
-   A draft is only a local convenience: it is never submitted automatically,
-   and it is cleared only after the inventory save succeeds or the owner
-   explicitly discards it. */
-function drawerElement() { return $("#drawer"); }
-
-function openDrawer(prefill = {}, options = {}) {
+/* Local recovery is scoped to the authenticated account. Text is written
+   synchronously on every change; photos are stored separately in IndexedDB. */
+const draftFields = ["id", "part_name", "oem_part_number", "alternate_numbers", "superseded_numbers", "category", "bin_location", "condition", "quantity", "unit_price", "fit_make_model", "fit_engine_years", "technical_notes", "image_path"];
+const storageKey = (kind) => `verifix:${encodeURIComponent(state.account)}:${kind}:v1`;
+function draftMessage(text) { $("#draft-status").textContent = text; }
+function saveDraft() {
+  if (!state.account || $("#drawer").hidden) return;
   const form = $("#part-form");
-  const recordId = prefill?.id ? String(prefill.id) : "";
-  const drawer = drawerElement();
-
-  // Adopting a finished scan is an explicit new-part intent: it replaces any
-  // old new-part draft without a dialog and is itself kept as the new draft.
-  // A stored draft is protected even when the drawer is closed: opening a
-  // different record must never silently destroy work the owner parked.
-  if (!options.skipDraftGuard && !options.scanPrefill && drafts && hasStoredDraft()) {
-    const existing = drafts.loadPartDraft();
-    const sameRecord = existing && String(existing.id || "") === recordId;
-    if (!sameRecord) {
-      const described = existing?.id
-        ? `the unsaved draft of part #${existing.id}`
-        : "your unsaved new-part draft";
-      const proceed = window.confirm(
-        `${described.charAt(0).toUpperCase()}${described.slice(1)} is kept on this device and would be replaced. Discard it and continue?`
-      );
-      if (!proceed) return;
-      clearPartDraftState();   // also deletes the stored draft and its photo
-    }
+  const fields = Object.fromEntries(draftFields.map((name) => [name, form.elements[name].value]));
+  fields.verified = form.elements.verified.checked;
+  state.draft = { version: 1, fields, photoKey: state.draft?.photoKey || null, photoName: state.draft?.photoName || "photo", uncertainCreate: !!state.draft?.uncertainCreate };
+  try {
+    localStorage.setItem(storageKey("draft"), JSON.stringify(state.draft));
+    draftMessage(state.draft.uncertainCreate ? "Previous creation may have completed. Check inventory before discarding; retry is blocked to prevent duplicates." : state.photoMissing ? "Photo not recovered — reselect it. Draft is not saved to inventory." : state.photoStorageFailed ? "Photo could not be saved locally; reselect it after reload. Draft is not saved to inventory." : state.photoSaving ? "Saving photo locally… Draft is not saved to inventory." : "Draft saved locally — not yet saved to inventory.");
+  } catch { draftMessage("Local draft could not be saved (storage unavailable or full). Keep this page open; save to inventory."); }
+}
+function photoDB() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) { reject(new Error("Photo storage unavailable")); return; }
+    const request = indexedDB.open("verifix-draft-photos", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("photos");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("Photo storage blocked"));
+  });
+}
+async function photoOperation(mode, key, value) {
+  const db = await photoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("photos", mode === "get" ? "readonly" : "readwrite");
+    const store = tx.objectStore("photos");
+    const request = mode === "get" ? store.get(key) : mode === "put" ? store.put(value, key) : store.delete(key);
+    tx.oncomplete = () => { db.close(); resolve(request.result); };
+    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+  });
+}
+function photoStorageKey(key) { return `${state.account}:${key}`; }
+const pendingPhotoOperations = new Set();
+function trackPhoto(promise) {
+  pendingPhotoOperations.add(promise);
+  promise.finally(() => pendingPhotoOperations.delete(promise)).catch(() => {});
+  return promise;
+}
+async function storePhoto(key, file) {
+  if (!key || !state.account) return;
+  const storage = photoStorageKey(key);
+  try {
+    await photoOperation("put", storage, file);
+    // If the draft was discarded or replaced while writing, remove the orphan.
+    if (state.draft?.photoKey !== key) await photoOperation("delete", storage);
+    else { state.photoSaving = false; saveDraft(); }
+  } catch {
+    if (state.draft?.photoKey === key) { state.photoSaving = false; state.photoStorageFailed = true; draftMessage("Photo could not be saved locally. Reselect it after a reload; draft is not saved to inventory."); }
   }
-
-  if (drawer.hidden === false) suspendDraftCapture = true;
-  form.reset();
-  clearFileInput(form.elements.part_image);
-  state.partDraftFile = null;
-
-  const fill = () => {
-    $("#drawer-title").textContent = recordId ? `Part #${recordId}` : "New part";
-    const fit = (prefill.fitment && prefill.fitment[0]) || {};
-    const values = {
-      id: recordId,
-      part_name: prefill.part_name || "",
-      oem_part_number: prefill.oem_part_number || "",
-      alternate_numbers: Array.isArray(prefill.alternate_numbers) ? prefill.alternate_numbers.join(", ") : (prefill.alternate_numbers || ""),
-      superseded_numbers: Array.isArray(prefill.superseded_numbers) ? prefill.superseded_numbers.join(", ") : (prefill.superseded_numbers || ""),
-      category: prefill.category || "",
-      bin_location: prefill.bin_location || "",
-      condition: prefill.condition || "New",
-      quantity: prefill.quantity ?? 0,
-      unit_price: prefill.unit_price ?? 0,
-      fit_make_model: prefill.fit_make_model || [fit.make, fit.model].filter(Boolean).join(" "),
-      fit_engine_years: prefill.fit_engine_years || [fit.engine, fit.years].filter(Boolean).join(" / "),
-      technical_notes: Array.isArray(prefill.technical_notes) ? prefill.technical_notes.join("\n") : (prefill.technical_notes || ""),
-      image_path: prefill.image_path || "",
+}
+async function purgeAccountPhotos(account) {
+  if (!window.indexedDB) return;
+  const db = await photoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("photos", "readwrite");
+    const request = tx.objectStore("photos").openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor) { if (typeof cursor.key === "string" && cursor.key.startsWith(`${account}:`)) cursor.delete(); cursor.continue(); }
     };
-    Object.entries(values).forEach(([key, value]) => {
-      const field = form.elements[key];
-      if (field) field.value = value;
-    });
-    form.elements.verified.checked = Boolean(prefill.verified);
-  };
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+  });
+}
+function clearDraft() {
+  let cleared = true;
+  const key = state.draft?.photoKey;
+  if (state.account) {
+    try { localStorage.removeItem(storageKey("draft")); } catch { cleared = false; toast("Could not clear local draft storage. Clear this site’s browser storage to remove it.", true); }
+    if (key) trackPhoto(photoOperation("delete", photoStorageKey(key)).catch(() => toast("Could not remove local photo storage.", true)));
+  }
+  state.draft = null; state.draftPhoto = null; state.photoMissing = false; state.photoStorageFailed = false; state.photoSaving = false;
+  return cleared;
+}
+function saveWorkspace() {
+  if (!state.account) return;
+  try { localStorage.setItem(storageKey("workspace"), JSON.stringify({ view: state.view || "identify", search: $("#search").value, filter: state.stockFilter, sort: state.receivedSort, scroll: window.scrollY })); } catch { /* optional */ }
+}
+function clearWorkspace() { if (state.account) try { localStorage.removeItem(storageKey("workspace")); } catch { return false; } return true; }
+async function restoreWorkspace() {
+  if (!state.account) { draftMessage("Local recovery unavailable: no signed-in account."); return; }
+  try {
+    const workspace = JSON.parse(localStorage.getItem(storageKey("workspace")) || "null");
+    if (workspace && typeof workspace === "object") {
+      $("#search").value = typeof workspace.search === "string" ? workspace.search : "";
+      if (["all", "in", "out", "review"].includes(workspace.filter)) state.stockFilter = workspace.filter;
+      state.receivedSort = [-1, 0, 1].includes(workspace.sort) ? workspace.sort : 0;
+      $("#sort-received").textContent = state.receivedSort === -1 ? "Date received ↓" : state.receivedSort === 1 ? "Date received ↑" : "Date received ↕";
+      $$("[data-stock-filter]").forEach((el) => { const active = el.dataset.stockFilter === state.stockFilter; el.classList.toggle("active", active); el.setAttribute("aria-pressed", String(active)); });
+      switchView(["identify", "inventory", "reports", "settings", "studio"].includes(workspace.view) ? workspace.view : "identify", true);
+      if (Number.isFinite(workspace.scroll)) requestAnimationFrame(() => window.scrollTo(0, workspace.scroll));
+    }
+    const draft = JSON.parse(localStorage.getItem(storageKey("draft")) || "null");
+    if (!draft) return;
+    if (draft.version !== 1 || !draft.fields || typeof draft.fields !== "object" || draftFields.some((key) => typeof draft.fields[key] !== "string") || typeof draft.fields.verified !== "boolean" || (draft.photoKey != null && typeof draft.photoKey !== "string") || (draft.fields.id && !/^\d+$/.test(draft.fields.id))) throw new Error("Invalid draft");
+    const form = $("#part-form");
+    form.reset();
+    draftFields.forEach((key) => { form.elements[key].value = draft.fields[key]; });
+    form.elements.verified.checked = draft.fields.verified;
+    state.draft = draft;
+    $("#drawer-title").textContent = draft.fields.id ? `Part #${draft.fields.id}` : "New part";
+    $("#drawer").hidden = false;
+    renderDrawerPhoto(draft.fields.image_path);
+    draftMessage("Draft restored locally — not yet saved to inventory.");
+    if (draft.photoKey) {
+      state.photoMissing = true;
+      try {
+        const photo = await photoOperation("get", photoStorageKey(draft.photoKey));
+        if (state.draft?.photoKey !== draft.photoKey) return;
+        if (!(photo instanceof Blob)) throw new Error("Missing photo");
+        state.draftPhoto = new File([photo], typeof draft.photoName === "string" ? draft.photoName : "photo", { type: photo.type });
+        state.photoMissing = false;
+        renderDrawerPhoto(draft.fields.image_path, state.draftPhoto);
+      } catch { if (state.draft?.photoKey === draft.photoKey) draftMessage("Photo could not be recovered — reselect it before saving. Draft is not saved to inventory."); }
+    }
+    if (draft.fields.id) {
+      try { await api(`/api/parts/${draft.fields.id}`); }
+      catch { if (state.draft === draft) draftMessage("Could not verify this record exists. Your draft is retained; check inventory before saving."); }
+    }
+    if (draft.uncertainCreate) draftMessage("Previous creation may have completed. Check inventory before discarding this draft; retry is blocked to prevent duplicates.");
+  } catch { draftMessage("Local recovery data is corrupted or unavailable; it has not been deleted."); toast("Could not restore local recovery data.", true); }
+}
 
-  // A stored draft for exactly this record (or a stored new-part draft when
-  // starting a new part) wins over the server values: that is unfinished work.
-  // A scan prefill is fresher explicit intent: it replaces the stored draft.
-  const stored = drafts ? drafts.loadPartDraft() : null;
-  const useDraft = Boolean(stored) && !options.scanPrefill
-    && String(stored.id || "") === recordId;
+/* A finished identification can cost a provider call and a web search, so the
+   completed report and its photo are kept for this account and re-rendered
+   locally after a reload. Restoring never re-runs the request: an identification
+   that was interrupted mid-flight simply leaves nothing to restore. */
+const scanPhotoKey = () => photoStorageKey("identify");
 
-  if (useDraft) {
-    suspendDraftCapture = true;
-    fill();
-    applyDraftToForm(stored);
-    suspendDraftCapture = false;
-    draftSavedState = false;
-    drawer.hidden = false;
-    restoreDraftPhoto(stored).catch(() => {});
-    setDraftStatus(draftRestoredText(stored), true);
-    form.elements.part_name.focus();
+function scanMessage(text, isError = false) {
+  const status = $("#identify-status");
+  if (!status) return;
+  status.className = isError ? "status error" : "status";
+  status.textContent = text;
+}
+
+/* A storage caveat is added to the identification status rather than replacing
+   it, so "Done — high confidence via gemini + web search" is never lost. */
+function scanNote(text) {
+  const status = $("#identify-status");
+  if (!status) return;
+  const existing = status.textContent.trim();
+  if (existing.includes(text)) return; // already disclosed, e.g. by an earlier flush
+  status.className = "status";
+  status.textContent = existing ? `${existing} ${text}` : text;
+}
+
+function saveScan() {
+  if (!state.account || !state.lastScan) return;
+  try { localStorage.setItem(storageKey("scan"), JSON.stringify({ version: 1, savedAt: Date.now(), result: state.lastScan })); }
+  catch { scanNote("This report could not be saved locally (storage unavailable or full), so it will be gone after a reload."); }
+}
+
+function keepScanPhoto(file) {
+  if (!state.account || !file) return;
+  trackPhoto(photoOperation("put", scanPhotoKey(), file).catch(() => {
+    scanNote("Its photo could not be saved locally, so pick the photo again after a reload.");
+  }));
+}
+
+function clearScan() {
+  if (!state.account) return true;
+  try { localStorage.removeItem(storageKey("scan")); } catch { return false; }
+  state.lastScan = null;
+  state.selectedFile = null;
+  return true;
+}
+
+function scanSavedLabel(savedAt) {
+  if (!Number.isFinite(savedAt)) return "this device";
+  try { return new Date(savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  catch { return "this device"; }
+}
+
+async function restoreScan() {
+  if (!state.account || state.lastScan) return;
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(storageKey("scan")) || "null"); }
+  catch { stored = undefined; }
+  if (stored === null) return;
+
+  const report = stored && stored.result ? stored.result.report : null;
+  if (!stored || stored.version !== 1 || !report || typeof report !== "object" || typeof report.overall_confidence !== "string") {
+    // A report is derived from a photo, so dropping a corrupt copy costs a
+    // re-scan rather than anyone's work — and leaving it would report the same
+    // corruption on every reload.
+    try { localStorage.removeItem(storageKey("scan")); } catch { /* optional */ }
+    scanMessage("The saved identification could not be read, so it was cleared. Nothing was re-run — take a photo to identify again.", true);
     return;
   }
 
-  suspendDraftCapture = true;
-  fill();
-  renderDrawerPhoto(prefill.image_path || "");
-  suspendDraftCapture = false;
-  draftSavedState = false;
-  drawer.hidden = false;
-  if (options.scanPrefill) {
-    // Keep the adopted scan as the local draft so a reload does not lose it.
-    capturePartDraft();
-  } else {
-    setDraftStatus("", false);
+  const when = scanSavedLabel(stored.savedAt);
+  state.lastScan = stored.result;
+  try {
+    renderReport(stored.result);
+    renderSources(stored.result);
+    renderMatch(stored.result);
+  } catch (error) {
+    state.lastScan = null;
+    scanMessage(`The saved identification could not be re-rendered (${error.message}). Nothing was re-run — take a photo to identify again.`, true);
+    return;
   }
+
+  const matched = stored.result.matched_part;
+  const stale = matched && Array.isArray(state.parts) && !state.parts.some((part) => part.id === matched.id);
+  // One message that later photo news is appended to, so a stale match is never
+  // hidden by the "photo recovered" line.
+  const base = `Identification from ${when} restored — not re-run.${stale ? ` Stock record #${matched.id} is no longer in inventory, so the match below is out of date.` : ""}`;
+  scanMessage(base);
+
+  let photo;
+  try { photo = await photoOperation("get", scanPhotoKey()); }
+  catch { photo = null; }
+  if (state.lastScan !== stored.result) return; // a newer scan landed meanwhile
+  if (!(photo instanceof Blob)) {
+    scanMessage(`${base} Its photo is no longer on this device, so pick it again to identify or attach one.`);
+    return;
+  }
+  state.selectedFile = new File([photo], typeof photo.name === "string" && photo.name ? photo.name : "photo.jpg", { type: photo.type });
+  const preview = $("#preview");
+  preview.src = URL.createObjectURL(state.selectedFile);
+  preview.hidden = false;
+  $("#dropzone-idle").hidden = true;
+  // Enabled, not clicked: re-identifying is always the user's decision.
+  $("#btn-identify").disabled = false;
+  scanMessage(`${base} The photo came back too.`);
+}
+
+/* ── drawer / form ────────────────────────────────────────── */
+function openDrawer(prefill = {}) {
+  if (state.savingPart) return;
+  if (state.draft) {
+    // A closed drawer is a parked draft, not a discard.
+    if (String(prefill.id || "") === String(state.draft.fields.id || "")) {
+      $("#drawer").hidden = false;
+      return;
+    }
+    if (!confirm("You have an unfinished local draft. Discard it and open another part?")) return;
+    clearDraft();
+  }
+  const form = $("#part-form");
+  form.reset();
+  $("#drawer-title").textContent = prefill.id ? `Part #${prefill.id}` : "New part";
+  const fit = (prefill.fitment && prefill.fitment[0]) || {};
+  const values = {
+    id: prefill.id || "",
+    part_name: prefill.part_name || "",
+    oem_part_number: prefill.oem_part_number || "",
+    alternate_numbers: Array.isArray(prefill.alternate_numbers) ? prefill.alternate_numbers.join(", ") : (prefill.alternate_numbers || ""),
+    superseded_numbers: Array.isArray(prefill.superseded_numbers) ? prefill.superseded_numbers.join(", ") : (prefill.superseded_numbers || ""),
+    category: prefill.category || "",
+    bin_location: prefill.bin_location || "",
+    condition: prefill.condition || "New",
+    quantity: prefill.quantity ?? 0,
+    unit_price: prefill.unit_price ?? 0,
+    fit_make_model: prefill.fit_make_model || [fit.make, fit.model].filter(Boolean).join(" "),
+    fit_engine_years: prefill.fit_engine_years || [fit.engine, fit.years].filter(Boolean).join(" / "),
+    technical_notes: Array.isArray(prefill.technical_notes) ? prefill.technical_notes.join("\n") : (prefill.technical_notes || ""),
+    image_path: prefill.image_path || "",
+  };
+  Object.entries(values).forEach(([key, value]) => {
+    const field = form.elements[key];
+    if (field) field.value = value;
+  });
+  form.elements.part_image.value = "";
+  renderDrawerPhoto(prefill.image_path || "");
+  form.elements.verified.checked = Boolean(prefill.verified);
+  $("#drawer").hidden = false;
+  state.draftPhoto = null;
+  state.photoMissing = false;
+  saveDraft();
   form.elements.part_name.focus();
 }
 
-function closeDrawer() {
-  const drawer = drawerElement();
-  if (drawer.hidden) return;
-  // Closing hides the drawer but keeps the draft: reopening the same record —
-  // or reloading the page — restores it. Nothing is silently destroyed. The
-  // closed state is remembered so a reload does not force the drawer back open.
-  flushPartDraft();
-  drawer.hidden = true;
-  drafts?.saveUi({ drawerOpen: false });
-}
+function closeDrawer() { if (state.savingPart) return; if (!$("#drawer").hidden) { saveDraft(); $("#drawer").hidden = true; } }
 
 function renderDrawerPhoto(path, localFile = null) {
   const preview = $("#part-photo-preview");
@@ -788,224 +936,19 @@ function renderDrawerPhoto(path, localFile = null) {
 }
 
 $("#part-form").elements.part_image.addEventListener("change", (event) => {
-  const file = event.target.files?.[0] || null;
+  const file = event.target.files?.[0];
   const path = $("#part-form").elements.image_path.value;
-  state.partDraftFile = file;
-  renderDrawerPhoto(path, file);
-  // Persist the newly chosen photo immediately (fields-change persistence).
-  if (drafts && file && drafts.draftsEnabled() && typeof file.arrayBuffer === "function") {
-    drafts.putPhoto("part", file).catch(() => {});
-  }
-  capturePartDraft();
+  const oldKey = state.draft?.photoKey;
+  if (oldKey && state.account) trackPhoto(photoOperation("delete", photoStorageKey(oldKey)).catch(() => toast("Could not remove previous local photo.", true)));
+  state.draftPhoto = file || null;
+  state.photoMissing = false;
+  state.photoStorageFailed = false;
+  state.photoSaving = !!file;
+  if (state.draft) { state.draft.photoKey = file ? `${Date.now()}-${Math.random()}` : null; state.draft.photoName = file?.name || "photo"; }
+  saveDraft();
+  if (file) trackPhoto(storePhoto(state.draft?.photoKey, file));
+  renderDrawerPhoto(path, file || null);
 });
-
-/* ── part-form draft capture / restore ────────────────────── */
-const DRAFT_TEXT_FIELDS = [
-  "part_name", "oem_part_number", "alternate_numbers", "superseded_numbers",
-  "category", "bin_location", "condition", "quantity", "unit_price",
-  "fit_make_model", "fit_engine_years", "technical_notes", "image_path",
-];
-
-function draftSnapshot() {
-  const form = $("#part-form");
-  const draft = { id: form.elements.id.value || "" };
-  for (const field of DRAFT_TEXT_FIELDS) draft[field] = form.elements[field]?.value ?? "";
-  draft.verified = Boolean(form.elements.verified?.checked);
-  const file = form.elements.part_image.files?.[0] || state.partDraftFile;
-  if (file && typeof file.arrayBuffer === "function") {
-    draft.photo = { name: file.name || "photo", type: file.type || "", size: file.size || 0 };
-  }
-  return draft;
-}
-
-/* Is there unfinished work stored on this device? Independent of whether the
-   drawer is currently on screen — closing the drawer must not forget it. */
-function hasStoredDraft() {
-  if (!drafts || draftSavedState) return false;
-  const draft = drafts.loadPartDraft();
-  return Boolean(draft) && !drafts._internal.draftIsEmpty(draft);
-}
-
-/* …and is it on screen right now (i.e. would opening something else replace
-   work the owner can currently see)? */
-function partDraftDirty() {
-  if (drawerElement().hidden) return false;
-  return hasStoredDraft();
-}
-
-function setDraftStatus(text, showDiscard) {
-  const status = $("#drawer-draft-status");
-  const discard = $("#btn-discard-draft");
-  if (status) {
-    status.textContent = text || "";
-    status.classList.toggle("draft-restored", Boolean(text));
-    status.hidden = !text;
-  }
-  if (discard) discard.hidden = !showDiscard;
-}
-
-function draftRestoredText(draft) {
-  const when = draft?.savedAt ? new Date(draft.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-  return `Draft restored from this device${when ? ` · saved ${when}` : ""} — not yet saved to inventory.`;
-}
-
-function capturePartDraft() {
-  if (!drafts || suspendDraftCapture || draftSavedState) return;
-  if (drawerElement().hidden) return;
-  if (!drafts.draftsEnabled()) return;
-  const draft = draftSnapshot();
-  if (drafts._internal.draftIsEmpty(draft)) return;
-  const result = drafts.savePartDraft(draft);
-  drafts.saveUi({ drawerOpen: !drawerElement().hidden });
-  const photo = draft.photo;
-  if (!photo) {
-    // A previously stored photo is only dropped when the draft itself no
-    // longer references one, never as a side effect of a text edit.
-    const stored = drafts.loadPartDraft();
-    if (stored?.photo) drafts.removePhoto("part").catch(() => {});
-  }
-  setDraftStatus(
-    (result?.persisted === false
-      ? "Draft kept in memory — local storage is full or blocked. Save to inventory soon."
-      : "Draft saved locally — not yet saved to inventory.")
-    + (photo ? " Photo included." : ""),
-    true,
-  );
-}
-
-function schedulePartDraft() {
-  clearTimeout(partDraftTimer);
-  partDraftTimer = setTimeout(capturePartDraft, 350);
-  flushPartDraftOnHide = true;
-}
-
-function flushPartDraft() {
-  clearTimeout(partDraftTimer);
-  partDraftTimer = null;
-  if (flushPartDraftOnHide) capturePartDraft();
-  flushPartDraftOnHide = false;
-}
-
-function applyDraftToForm(draft) {
-  const form = $("#part-form");
-  form.elements.id.value = draft.id || "";
-  for (const field of DRAFT_TEXT_FIELDS) {
-    if (form.elements[field]) form.elements[field].value = draft[field] ?? "";
-  }
-  form.elements.verified.checked = draft.verified === true;
-  $("#drawer-title").textContent = draft.id ? `Part #${draft.id}` : "New part";
-}
-
-/* A file input can only be refilled through DataTransfer, and some engines
-   expose `files` as read-only (assignment throws in strict mode). Try the
-   standard route, then a defined accessor, and report honestly if neither
-   works — a recovered photo is never implied when it was not recovered. */
-function attachFileToInput(input, file) {
-  if (!input || !file) return false;
-  try {
-    if (typeof window.DataTransfer === "function") {
-      const transfer = new window.DataTransfer();
-      transfer.items.add(file);
-      input.files = transfer.files;
-      const attached = input.files?.[0];
-      if (attached && (attached === file || attached.name === file.name)) return true;
-    }
-  } catch { /* read-only files property — fall through */ }
-  try {
-    const list = { 0: file, length: 1, item: (index) => (index === 0 ? file : null) };
-    Object.defineProperty(input, "files", { value: list, configurable: true, writable: true });
-    // Mark it: form.reset()/value="" cannot clear a property we defined, so a
-    // later openDrawer must remove it explicitly or a stale photo would follow
-    // the owner into the next record.
-    input.dataset.syntheticFiles = "1";
-    return Boolean(input.files?.[0]);
-  } catch { return false; }
-}
-
-function clearFileInput(input) {
-  if (!input) return;
-  if (input.dataset?.syntheticFiles === "1") {
-    try { delete input.files; } catch { /* keep going */ }
-    delete input.dataset.syntheticFiles;
-  }
-  try { input.value = ""; } catch { /* some engines reject this; harmless */ }
-}
-
-async function restoreDraftPhoto(draft) {
-  const form = $("#part-form");
-  const marker = draft.photo;
-  if (marker) {
-    const file = await drafts.getPhoto("part");
-    if (file) {
-      state.partDraftFile = file;
-      const attached = attachFileToInput(form.elements.part_image, file);
-      renderDrawerPhoto(form.elements.image_path.value, file);
-      if (!attached) {
-        // Honest fallback: the photo is in memory and savePart() will upload
-        // it, but the input could not be refilled programmatically.
-        setDraftStatus(`${draftRestoredText(draft)} Photo recovered in memory — the file field could not be refilled, so re-pick it if the save reports a missing photo.`, true);
-      }
-      return;
-    }
-    state.partDraftFile = null;
-    renderDrawerPhoto(form.elements.image_path.value || "");
-    setDraftStatus(`${draftRestoredText(draft)} The stored photo could not be recovered — re-select it before saving.`, true);
-    return;
-  }
-  state.partDraftFile = null;
-  renderDrawerPhoto(form.elements.image_path.value || "");
-}
-
-async function restorePartDraft() {
-  if (!drafts) return;
-  const ui = drafts.loadUi() || {};
-  const draft = drafts.loadPartDraft();
-  if (!draft || !ui.drawerOpen) return;
-  draftSavedState = false;
-  openDrawer({ id: draft.id || "" }, { skipDraftGuard: true });
-  if (draft.id) {
-    // The record may have been deleted while the tab was in the background.
-    // Check it still exists rather than offering to PATCH a missing id.
-    try {
-      await api(`/api/parts/${encodeURIComponent(draft.id)}`);
-    } catch (error) {
-      if (/not found|404/i.test(error.message || "")) {
-        const form = $("#part-form");
-        suspendDraftCapture = true;
-        form.elements.id.value = "";
-        suspendDraftCapture = false;
-        $("#drawer-title").textContent = "New part";
-        drafts.savePartDraft(draftSnapshot());
-        setDraftStatus(`${draftRestoredText(draft)} Record #${draft.id} no longer exists — saving now creates a new part.`, true);
-      }
-      // Offline or other errors: keep the id; a failing save shows the reason.
-    }
-  }
-}
-
-function discardPartDraft() {
-  const proceed = window.confirm("Discard this local draft? The entered values and recovered photo will be deleted from this device. The inventory record itself is not touched.");
-  if (!proceed) return;
-  clearPartDraftState();
-  setDraftStatus("", false);
-  toast("Local draft discarded");
-}
-
-function clearPartDraftState() {
-  clearTimeout(partDraftTimer);
-  partDraftTimer = null;
-  flushPartDraftOnHide = false;
-  suspendDraftCapture = true;
-  const form = $("#part-form");
-  form.reset();
-  clearFileInput(form.elements.part_image);
-  form.elements.id.value = "";
-  state.partDraftFile = null;
-  renderDrawerPhoto("");
-  suspendDraftCapture = false;
-  draftSavedState = false;
-  if (drafts) drafts.clearPartDraft().catch(() => {});
-}
 
 const splitList = (value) => String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
 
@@ -1014,6 +957,9 @@ async function savePart(event) {
   const form = event.target;
   const submitButton = form.querySelector('button[type="submit"]');
   if (submitButton?.disabled) return;
+  if (state.photoMissing) { toast("Reselect the missing photo before saving, or discard the draft.", true); return; }
+  if (state.draft?.uncertainCreate) { toast("The previous create may have completed. Check inventory before discarding this draft; it cannot be safely retried automatically.", true); return; }
+  state.savingPart = true;
   if (submitButton) { submitButton.disabled = true; submitButton.textContent = "Saving…"; }
   const get = (name) => form.elements[name]?.value ?? "";
   const id = get("id");
@@ -1046,37 +992,21 @@ async function savePart(event) {
     if (id) {
       saved = await api(`/api/parts/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
     } else {
+      if (state.draft) { state.draft.uncertainCreate = true; saveDraft(); }
       saved = await api("/api/parts", { method: "POST", body: JSON.stringify(payload) });
-      // Record the new id immediately: if the photo upload below fails, the
-      // local draft keeps this id, so a retry after reload PATCHes the record
-      // it just created instead of inserting a duplicate.
-      suspendDraftCapture = true;
       form.elements.id.value = saved.id;
+      if (state.draft) state.draft.uncertainCreate = false;
+      saveDraft();
       $("#drawer-title").textContent = `Part #${saved.id}`;
-      suspendDraftCapture = false;
-      capturePartDraft();
     }
-    // The photo comes from the file input, or from a draft recovered out of
-    // IndexedDB when the input could not be refilled after a reload.
-    const photo = form.elements.part_image.files?.[0] || state.partDraftFile;
+    const photo = state.draftPhoto || form.elements.part_image.files?.[0];
     if (photo) {
       const imageForm = new FormData();
       imageForm.append("file", photo);
       saved = await api(`/api/parts/${saved.id}/image`, { method: "POST", body: imageForm });
     }
-    // The record (and its photo) are on the server now: the local draft has
-    // done its job and is cleared. Failed saves keep it for the retry.
-    clearTimeout(partDraftTimer);
-    partDraftTimer = null;
-    flushPartDraftOnHide = false;
-    draftSavedState = true;
-    state.partDraftFile = null;
-    if (drafts) {
-      drafts.clearPartDraft().catch(() => {});
-      drafts.saveUi({ drawerOpen: false });
-    }
-    setDraftStatus("", false);
-    closeDrawer();
+    clearDraft();
+    $("#drawer").hidden = true;
     await loadParts($("#search").value);
     let successMessage = id ? "Part updated" : `Added part #${saved.id}`;
     if (id && !state.parts.some((part) => part.id === Number(id))) {
@@ -1089,14 +1019,11 @@ async function savePart(event) {
     toast(successMessage);
     populateStudioSelect();
   } catch (error) {
-    // Keep the draft: the save did not succeed, so the work must survive a
-    // reload or a switch away from this tab.
-    flushPartDraft();
-    if (drafts && partDraftDirty()) {
-      setDraftStatus("Save failed — your draft is kept on this device and was not saved to inventory.", true);
-    }
-    toast(error.message, true);
+    if (state.draft?.uncertainCreate && error.status >= 400 && error.status < 500) state.draft.uncertainCreate = false;
+    saveDraft();
+    toast(error.message + (state.draft?.uncertainCreate ? " Check inventory before retrying: creation may have succeeded." : ""), true);
   } finally {
+    state.savingPart = false;
     if (submitButton) { submitButton.disabled = false; submitButton.textContent = "Save part"; }
   }
 }
@@ -1377,13 +1304,10 @@ async function loadVerificationSummary() {
   }
 }
 
-function switchView(name) {
-  // Persist where the owner was: after a mobile reload or tab-kill the same
-  // tab is shown again instead of falling back to Identify/home.
-  if (drafts && state.view && state.view !== name) {
-    drafts.saveUi({ scroll: { ...scrollMemory(), [state.view]: currentScrollY() } });
-  }
+function switchView(name, restoring = false) {
+  if (!$( `.tab[data-view="${name}"]`)) return;
   state.view = name;
+  if (!restoring) saveWorkspace();
   $$(".tab").forEach((tab) => {
     const selected = tab.dataset.view === name;
     tab.classList.toggle("active", selected);
@@ -1405,122 +1329,7 @@ function switchView(name) {
   if (name === "inventory") loadParts($("#search").value);
   if (name === "reports") loadVerificationSummary();
   if (name === "studio") populateStudioSelect();
-  if (drafts) drafts.saveUi({ view: name });
-  const target = drafts?.loadUi()?.scroll?.[name];
-  window.scrollTo({ top: Number(target) || 0, behavior: target ? "auto" : "smooth" });
-}
-
-/* ── local draft restore / persistence wiring ─────────────── */
-function currentScrollY() {
-  const y = Number(window.scrollY || 0);
-  return Number.isFinite(y) && y > 0 ? Math.min(y, 100000) : 0;
-}
-
-function scrollMemory() {
-  return (drafts && drafts.loadUi()?.scroll) || {};
-}
-
-function persistUiState() {
-  if (!drafts) return;
-  drafts.saveUi({
-    view: state.view,
-    search: $("#search")?.value || "",
-    stockFilter: state.stockFilter,
-    receivedSort: state.receivedSort,
-    drawerOpen: drawerElement().hidden === false && hasStoredDraft(),
-    scroll: { ...scrollMemory(), [state.view]: currentScrollY() },
-  });
-}
-
-function restoreUiDraft() {
-  if (!drafts) return;
-  const ui = drafts.loadUi();
-  if (!ui) return;
-  if ($("#search")) $("#search").value = ui.search || "";
-  if (ui.stockFilter) {
-    state.stockFilter = ui.stockFilter;
-    $$("[data-stock-filter]").forEach((chip) => {
-      const selected = chip.dataset.stockFilter === ui.stockFilter;
-      chip.classList.toggle("active", selected);
-      chip.setAttribute("aria-pressed", String(selected));
-    });
-  }
-  if (ui.receivedSort) {
-    state.receivedSort = ui.receivedSort;
-    const button = $("#sort-received");
-    if (button) button.textContent = ui.receivedSort === -1 ? "Date received ↓" : "Date received ↑";
-  }
-  syncDraftPrefUi();
-  if (ui.view && $(`#tab-${ui.view}`)) switchView(ui.view);
-}
-
-function restoreScanDraft() {
-  if (!drafts || !drafts.draftsEnabled()) return;
-  const stored = drafts.loadScan();
-  if (!stored || state.lastScan) return;
-  const result = stored.result;
-  state.lastScan = result;
-  renderReport(result);
-  renderSources(result);
-  renderMatch(result);
-  const status = $("#identify-status");
-  const when = stored.savedAt ? new Date(stored.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-  status.className = "status";
-  status.textContent = `Identification result restored from this device${when ? ` (saved ${when})` : ""} — it was not re-run.`;
-  $("#btn-identify").disabled = false;
-  // Recover the captured photo from IndexedDB when it is still there.
-  drafts.getPhoto("identify").then((file) => {
-    if (!file) {
-      status.textContent += " The photo itself was not recovered — re-add it to run a new identification.";
-      return;
-    }
-    // A restore must never trigger auto-detect: no interrupted or completed
-    // identification request is ever re-run automatically.
-    state.selectedFile = file;
-    const preview = $("#preview");
-    preview.src = URL.createObjectURL(file);
-    preview.hidden = false;
-    $("#dropzone-idle").hidden = true;
-  }).catch(() => {});
-}
-
-function wireDraftPersistence() {
-  if (!drafts) return;
-  const form = $("#part-form");
-  form.addEventListener("input", schedulePartDraft, { capture: true });
-  form.addEventListener("change", schedulePartDraft, { capture: true });
-
-  $("#btn-discard-draft")?.addEventListener("click", discardPartDraft);
-
-  const keep = $("#keep-drafts");
-  if (keep) {
-    syncDraftPrefUi();
-    keep.addEventListener("change", () => {
-      drafts.setDraftsEnabled(keep.checked);
-      if (!keep.checked) {
-        clearPartDraftState();
-        setDraftStatus("", false);
-        toast("Local drafts turned off and deleted from this device");
-      } else {
-        toast("Local drafts will be kept on this device");
-      }
-    });
-  }
-
-  // Mobile browsers can kill a background tab at any moment: persist on every
-  // hide, not just on unload (which often never fires on phones).
-  const persistNow = () => {
-    flushPartDraft();
-    persistUiState();
-  };
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") persistNow(); });
-  window.addEventListener("pagehide", persistNow);
-  window.addEventListener("beforeunload", persistNow);
-}
-
-function syncDraftPrefUi() {
-  const keep = $("#keep-drafts");
-  if (keep && drafts) keep.checked = drafts.draftsEnabled();
+  if (!restoring) window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function wireUi() {
@@ -1554,21 +1363,37 @@ function wireUi() {
       filter.setAttribute("aria-pressed", String(selected));
     });
     renderParts();
-    drafts?.saveUi({ stockFilter: state.stockFilter });
+    saveWorkspace();
   }));
   $("#btn-signout").addEventListener("click", async () => {
-    // Explicit logout wipes this account's local drafts and photos first — the
-    // wipe happens even if the sign-out request itself then fails.
-    if (drafts) {
-      try { await drafts.clearAccount(); } catch { /* best effort */ }
-    }
+    if (state.savingPart) { toast("Wait for the part save to finish before signing out.", true); return; }
     try {
+      const draftCleared = clearDraft();
+      // Evaluated separately: a failure in one store must not skip the others.
+      const workspaceCleared = clearWorkspace();
+      const scanCleared = clearScan();
+      if (!draftCleared || !workspaceCleared || !scanCleared) throw new Error("Browser storage could not be cleared");
+      $("#drawer").hidden = true;
+      await Promise.all([...pendingPhotoOperations]);
+      await purgeAccountPhotos(state.account);
+      state.account = null;
       await api("/api/auth/signout", { method: "POST" });
       window.location.assign("/login");
-    } catch (error) { toast(error.message, true); }
+    } catch (error) { toast(`Sign out could not finish clearing local data: ${error.message}. Clear this site’s browser storage and try again.`, true); }
   });
   $("#shop-settings-form").addEventListener("submit", saveShopSettings);
   $("#part-form").addEventListener("submit", savePart);
+  $("#part-form").addEventListener("input", saveDraft);
+  $("#part-form").addEventListener("change", (event) => { if (event.target.name !== "part_image") saveDraft(); });
+  $("#discard-draft").addEventListener("click", () => {
+    if (state.savingPart) return;
+    if (!confirm("Discard this local draft? Unsaved changes will be lost.")) return;
+    clearDraft();
+    $("#drawer").hidden = true;
+  });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { saveDraft(); saveScan(); saveWorkspace(); } });
+  window.addEventListener("pagehide", () => { saveDraft(); saveScan(); saveWorkspace(); });
+  window.addEventListener("scroll", saveWorkspace, { passive: true });
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
   $("#btn-new-part").addEventListener("click", () => openDrawer({}));
@@ -1637,12 +1462,11 @@ function wireUi() {
   let timer;
   $("#search").addEventListener("input", (event) => {
     clearTimeout(timer);
-    drafts?.saveUi({ search: event.target.value });
+    saveWorkspace();
     timer = setTimeout(() => loadParts(event.target.value), 220);
   });
 }
 
 wireDropzone();
 wireUi();
-wireDraftPersistence();
 boot();

@@ -473,15 +473,3 @@ body { background: radial-gradient(ellipse 85% 650px at 90% 0, #edc66b06, transp
   .report-count { padding: 12px; }
   .import-block { margin: 16px; }
 }
-
-/* Local draft persistence: the drawer indicator and the discard control. */
-.drawer-head-actions { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-#btn-discard-draft { color: var(--amber); border-color: #695c39; }
-.draft-status { margin: -14px 0 18px; padding: 9px 12px; color: var(--amber); border: 1px solid #695c39; border-radius: 8px; background: #edc66b0d; font-size: 12px; line-height: 1.45; }
-.draft-status:empty { display: none; }
-#keep-drafts { margin-top: 10px; }
-@media (max-width: 680px) {
-  .drawer-head-actions { gap: 6px; }
-  .drawer-head-actions .btn { flex: 0 1 auto; padding-inline: 10px; }
-  .draft-status { margin-top: -8px; }
-}
