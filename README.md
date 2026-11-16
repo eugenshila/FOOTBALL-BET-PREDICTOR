@@ -102,6 +102,55 @@ Verifix's warm-yellow theme.
 
 ---
 
+## Collecting stock on your phone
+
+Mobile browsers unload background tabs aggressively. Switch to another app to
+copy a part number, come back, and the phone may reload Verifix from scratch.
+The workspace now survives that without any AI service or network dependency:
+
+| What is kept | Where | Restored as |
+|---|---|---|
+| Active tab (Identify / Inventory / Studio / Reports / Settings) | `localStorage` | The same tab, not the home page |
+| Inventory search, stock filter and date sort | `localStorage` | Re-applied before the rows render |
+| Scroll position per tab | `localStorage` | Best effort, after the rows render |
+| Unfinished **New part / Edit part** form — record id, every text field, quantity, price, verified checkbox, existing image path | `localStorage` | The drawer reopens with its values |
+| The photo you selected for that form | `IndexedDB` (blob) | Recovered into the file input, uploaded by **Save part** |
+| The last *completed* identification report and its photo | `localStorage` + `IndexedDB` | Re-rendered locally — never re-run |
+
+Drafts are written **as fields change** (a short debounce) and again on
+`visibilitychange`, `pagehide` and `beforeunload`, because a phone may kill the
+tab before any unload event fires.
+
+The drawer shows a small indicator — *Draft saved locally — not yet saved to
+inventory* or *Draft restored from this device · saved 14:05 — not yet saved to
+inventory* — so a local draft is never mistaken for a stock record. A
+**Discard draft** button deletes it after a confirmation.
+
+Guarantees worth knowing:
+
+* **Nothing is submitted for you.** A recovered draft is never auto-saved, so a
+  reload cannot create a duplicate stock record. You press **Save part**.
+* **A draft is cleared only after a successful save or an explicit discard.**
+  Closing the drawer keeps it; a failed save keeps it and says so.
+* **Saving once.** After a create succeeds, the new record id is written into
+  the draft immediately, so if the *photo* upload then fails, the retry after a
+  reload updates that record instead of inserting a second one.
+* **Per account.** Keys are scoped to the signed-in email, so two operators on
+  one phone never see each other's drafts. **Sign out deletes that account's
+  drafts and photos from the device.** An expired session does not — you get
+  them back after signing in again.
+* **Honest failures.** If storage is full or blocked the indicator says the
+  draft is memory-only; if a photo blob cannot be read back it says the photo
+  was *not* recovered rather than implying it was; if the record behind an edit
+  draft was deleted, the draft becomes a new-part draft and tells you.
+* **Off switch.** Settings → *Keep drafts on this device*. Turning it off
+  deletes what is stored.
+
+This is on-device convenience only: drafts are **not** synced between browsers
+or phones, and they are not a backup of your inventory.
+
+---
+
 ## Quick start
 
 ```bash
@@ -175,6 +224,24 @@ npm install jsdom
 # Use a dedicated local test account. Set AUTH_EMAIL and AUTH_PASSWORD in your
 # shell, or AUTH_COOKIE, then run against the server on :8000:
 node scripts/ui_smoke.cjs
+```
+
+There is a second browser-level suite for **mobile draft recovery**,
+`scripts/ui_draft_reload.cjs`. It simulates a real page reload: each "reload"
+builds a brand-new jsdom window (new DOM, no in-memory state) against the
+running server while `localStorage` and `IndexedDB` persist — which is exactly
+what happens when a phone discards a background tab. It covers tab/search/filter
+restore, new-part and edit-part draft recovery, photo recovery through
+IndexedDB, save-once (record stage *and* photo stage failures), discard, account
+isolation, logout wipe, corrupted drafts, quota errors and the identification
+result being restored without a re-run:
+
+```bash
+npm install jsdom
+# Two dedicated local test accounts are needed for the isolation checks:
+AUTH_EMAIL=ui-a@verifix.test AUTH_PASSWORD=... \
+AUTH_EMAIL_B=ui-b@verifix.test AUTH_PASSWORD_B=... \
+  node scripts/ui_draft_reload.cjs          # or: make ui-draft-test
 ```
 
 API tests:
@@ -324,6 +391,8 @@ Sample renders live in [`docs/samples/`](docs/samples).
 
 ```
 web/                     Vanilla JS + CSS operator UI (no build step)
+  static/app.js          Views, inventory, drawer, studio, cards
+  static/drafts.js       On-device drafts: localStorage + IndexedDB, per account
 app/
   main.py                FastAPI routes: identify · inventory · cards · scans
   models.py              Pydantic schemas (report, part, fitment, card, stock movement)
@@ -453,6 +522,15 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
    sessions, not Supabase. Operators share the same shop inventory (no per-user
    stock isolation). Use trusted LANs and HTTPS; do not expose it directly to the
    internet. See [Windows local-auth setup](docs/LOCAL_AUTH_WINDOWS.md).
+7. **Phone drafts are per browser, not synced.** The unfinished-form/photo
+   recovery in [Collecting stock on your phone](#collecting-stock-on-your-phone)
+   lives in that browser's `localStorage`/`IndexedDB` only. Clearing site data,
+   using private browsing, or switching phone or browser loses it, and a browser
+   under storage pressure may evict it. It is a safety net for tab switches —
+   save to inventory as soon as the record is complete. Photo recovery needs
+   IndexedDB; without it the text draft still returns and the app says the photo
+   was not recovered. Scroll position is restored best-effort (a browser that
+   restores its own scroll may win).
 
 ---
 

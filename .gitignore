@@ -31,8 +31,10 @@ exports/
 .vscode/
 *.swp
 
-# Optional browser smoke-test dependencies
+# Optional browser smoke-test dependencies (`npm install jsdom` generates these)
 node_modules/
+package.json
+package-lock.json
 
 # Local login accounts/sessions and Windows auth backups (never commit)
 data/local-auth.db*

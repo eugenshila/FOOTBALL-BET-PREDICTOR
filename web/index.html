@@ -282,6 +282,11 @@
         <p class="muted small">These links point to your public pages; they do not log in or publish for you. Direct publishing needs a public HTTPS app, approved developer apps and a secure account-connection flow. Do not enter passwords or access tokens here.</p>
       </div>
       <div class="settings-note">
+        <strong>On-device drafts</strong>
+        <p class="muted small">Unfinished part forms, your selected photo, the last completed identification and the active tab are kept in this browser only, scoped to the signed-in account. They survive a mobile tab switch or reload, are never uploaded, and are deleted on sign-out. A local draft is not an inventory record until you save it.</p>
+        <label class="check"><input type="checkbox" id="keep-drafts" checked /> Keep drafts on this device</label>
+      </div>
+      <div class="settings-note">
         <strong>Cloud backup</strong>
         <p class="muted small">A backup script and Windows Task Scheduler setup guide are included with the project. Cloud upload stays disabled until you configure a private S3-compatible bucket and credentials in the local <code>.env</code> file.</p>
         <a class="btn ghost small-btn" href="/help/cloud-backups" target="_blank" rel="noopener">Read backup setup</a>
@@ -297,8 +302,12 @@
   <form id="part-form" class="drawer-panel">
     <div class="panel-head">
       <h2 class="panel-title" id="drawer-title">New part</h2>
-      <button type="button" class="btn ghost small-btn" data-close>Close</button>
+      <div class="row gap drawer-head-actions">
+        <button type="button" id="btn-discard-draft" class="btn ghost small-btn" hidden>Discard draft</button>
+        <button type="button" class="btn ghost small-btn" data-close>Close</button>
+      </div>
     </div>
+    <p id="drawer-draft-status" class="status draft-status small" role="status" aria-live="polite" hidden></p>
     <input type="hidden" name="id" />
     <div class="form-grid">
       <label class="field span2"><span>Part name *</span><input class="input" name="part_name" required /></label>
@@ -330,6 +339,7 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
+<script src="/static/drafts.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

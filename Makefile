@@ -1,4 +1,4 @@
-.PHONY: install install-pg run test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export clean
+.PHONY: install install-pg run test test-pg check-db check-providers ui-test ui-draft-test cards cli import load-stock reset-db export clean
 
 install:
 	python3 -m venv .venv
@@ -28,6 +28,11 @@ check-providers:
 # Browser-level regression pass; needs Node + `npm install jsdom`
 ui-test:
 	node scripts/ui_smoke.cjs
+
+# Mobile tab-switch / page-reload draft recovery; needs Node + jsdom and two
+# local test accounts (AUTH_EMAIL/AUTH_PASSWORD and AUTH_EMAIL_B/AUTH_PASSWORD_B)
+ui-draft-test:
+	node scripts/ui_draft_reload.cjs
 
 # Replace the whole inventory from a spreadsheet (validates before deleting)
 load-stock:

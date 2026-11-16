@@ -80,6 +80,9 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   if (new URL(page.url).pathname === "/login") throw new Error("Set AUTH_EMAIL and AUTH_PASSWORD for a dedicated local test account, or AUTH_COOKIE.");
   const html = await page.text();
   const appJs = await (await fetch(`${BASE}/static/app.js`)).text();
+  // The page also ships the local-draft library; load it like the browser does
+  // (jsdom has no IndexedDB, which exercises the graceful fallback path).
+  const draftsJs = await (await fetch(`${BASE}/static/drafts.js`)).text();
 
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (e) => {
@@ -134,6 +137,7 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   }
 
   // boot the app exactly as a browser would
+  window.eval(draftsJs);
   window.eval(appJs);
 
   // ── 1. boot ────────────────────────────────────────────────────────────────

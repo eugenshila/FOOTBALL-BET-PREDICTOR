@@ -209,7 +209,39 @@ region). The app still works — it falls back automatically.
 | Publish a WhatsApp card | **Promo studio** → pick part → *Generate cards* → download |
 | Look up a number at the counter | `python -m app.cli lookup 5184894AA` |
 | Add stock received | `＋1 stock` on a matched part, or `POST /api/parts/{id}/adjust` |
+| Collect stock on your phone | **Inventory** → `＋ New part` → fill what you know → switch apps freely → come back and finish |
 | Back up everything | `pg_dump -U partsid_user partsid > backup.sql` |
+
+### Switching apps on your phone
+
+Mobile browsers reload or kill a background tab when you switch to another app
+(to copy a part number into Gemini, say). Verifix keeps your place on the device
+so you can come back and carry on:
+
+* the **tab you were on** (Inventory, not the home page), plus its search,
+  stock filter and date sort;
+* the **unfinished New part / Edit part form** — record id, every text field,
+  quantity, price, the verified checkbox and the existing photo path;
+* the **photo you selected**, recovered from IndexedDB and uploaded when you
+  press **Save part** (a file field cannot normally be refilled by a page, so
+  the app keeps the image bytes itself);
+* the **last completed identification**, re-rendered from the device instead of
+  running another scan.
+
+The drawer tells you what happened — *Draft saved locally* or *Draft restored
+from this device · saved 14:05* — and always adds **not yet saved to
+inventory**, because a draft is not a stock record.
+
+Nothing is saved for you and no duplicate record is created: **you** press
+**Save part**. The draft is deleted only when that save succeeds, or when you
+choose **Discard draft** and confirm. Closing the drawer keeps the draft;
+reopening the same part (or **＋ New part**) brings it back. If a save fails,
+the draft is kept and the drawer says so.
+
+Drafts belong to the signed-in account and never leave the phone. **Sign out
+deletes them.** Turn the whole thing off under **Settings → Keep drafts on this
+device**; that also deletes what is already stored. They are not synced between
+phones or browsers and are not a substitute for saving the record.
 
 Seed the database from your spreadsheet **before** going live:
 
@@ -301,6 +333,11 @@ ends up in the repository.
 | `check-providers` shows `FAIL ... 400` | The key is valid but the model/region rejects search grounding. Try `GROUNDING_MODEL=gemini-2.0-flash`, or set `SEARCH_GROUNDING=false` to use plain vision |
 | "Reverse image search" button missing | Google Lens needs a *publicly reachable* photo, so it is hidden on `localhost`. Set `PUBLIC_BASE_URL=https://your-domain` (or use a tunnel) to enable it |
 | Everything is slow on first upload | First call loads the model / warms caches; later uploads are ~1–3 s |
+| Phone came back on the Identify page | The tab is restored from device storage, so this means storage was blocked or cleared (private browsing, "clear site data", or a browser under pressure). Save the record instead of relying on the draft |
+| Drawer says *Draft kept in memory* | `localStorage` is full or blocked. The draft will not survive a reload — finish and save it now |
+| Drawer says *the stored photo could not be recovered* | The image bytes are gone from IndexedDB (cleared site data, or IndexedDB unavailable). The text fields are still restored; re-select the photo before saving. The app never implies a photo came back when it did not |
+| Drawer says *Record #N no longer exists* | That record was deleted while the tab was in the background. The draft became a **new part** draft, so saving creates one record rather than failing |
+| You want two operators' drafts kept apart | They already are: drafts are keyed per signed-in account, and each account's data is deleted when that account signs out |
 
 ---
 
@@ -328,6 +365,30 @@ node scripts/ui_smoke.cjs         # server must be running on :8000
 
 It prints `PASS`/`FAIL` per check, exits non-zero on failure, and cleans up the
 test parts it creates. Set `BASE=http://localhost:8001` to point it elsewhere.
+
+### Testing the phone reload case
+
+Switching the app's own tabs is not the same as a browser reload, so draft
+recovery has its own suite. `scripts/ui_draft_reload.cjs` throws the window away
+between steps — a new jsdom window with a new DOM and no in-memory state, while
+`localStorage` and `IndexedDB` persist — which is what a phone does to a
+background tab. It then checks that the tab, search, filter, sort, form values
+and photo all come back, that saving creates or updates the record exactly once
+(including when the record save or the photo upload fails first), that a discard
+is confirmed, that two accounts do not see each other's drafts, that sign-out
+wipes them, and that corrupted drafts, a full quota and a missing IndexedDB
+degrade honestly.
+
+```powershell
+npm install jsdom                 # once (needs Node.js)
+# Create two dedicated local test accounts first (step 4a), then:
+$env:AUTH_EMAIL = "ui-a@verifix.test";   $env:AUTH_PASSWORD = "..."
+$env:AUTH_EMAIL_B = "ui-b@verifix.test"; $env:AUTH_PASSWORD_B = "..."
+node scripts/ui_draft_reload.cjs  # server must be running on :8000
+```
+
+Both suites delete the probe parts they create, so they are safe against a real
+database.
 
 ## Running the tests
 
