@@ -258,10 +258,34 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   check("rows show OEM, bin and price",
     firstRow.textContent.includes("KES") || /\d/.test(firstRow.textContent));
 
+  // Layout cleanup: one photo, fixed columns, no crowded text buttons.
+  const headings = [...doc.querySelectorAll("#parts-table thead th")].map((th) => th.textContent.trim());
+  check("inventory uses one column per field with no duplicate photo column",
+    headings.length === 8 && !headings.some((h) => /^photo$/i.test(h)), headings.join(" | "));
+  const allRows = () => [...doc.querySelectorAll("#parts-body tr")];
+  check("each row shows exactly one photo",
+    allRows().length > 0 && allRows().every((row) =>
+      row.querySelectorAll(".part-photo").length === 1
+      && row.querySelectorAll("img.part-thumb, .part-placeholder").length === 1
+      && row.querySelectorAll(".part-photo-thumb").length === 0));
+  check("row actions are one compact icon group",
+    allRows().every((row) => {
+      const group = row.querySelector(".row-actions");
+      return group && group.querySelectorAll("button").length === 3
+        && [...group.querySelectorAll("button")].every((b) => b.classList.contains("icon-action"));
+    }));
+  check("quantities and prices have dedicated cells that stay on one line",
+    allRows().every((row) => {
+      const qty = row.querySelector(".qty-column");
+      const price = row.querySelector(".price-column");
+      return qty && price && Number.isFinite(Number(qty.textContent.trim()))
+        && !/\n/.test(price.textContent) && price.textContent.trim().length > 0;
+    }));
+
   // search filter — derive the query from the data so this works with any
   // inventory, not just the demo catalogue
   const search = doc.querySelector("#search");
-  const sampleOem = firstRow.querySelectorAll("td")[1].textContent.trim();
+  const sampleOem = firstRow.querySelector(".oem-column").textContent.trim();
   search.value = sampleOem === "—" ? firstRow.querySelector(".part-name").textContent.split(" ")[0] : sampleOem;
   search.dispatchEvent(new window.Event("input", { bubbles: true }));
   await waitFor("filtered rows", () => {
@@ -298,7 +322,7 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   doc.querySelector('[data-stock-filter="out"]').click();
   check("out-of-stock filter shows only empty stock lines",
     Boolean(doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`))
-      && [...doc.querySelectorAll("#parts-body tr")].every((r) => Number(r.querySelectorAll("td")[4].textContent) === 0));
+      && [...doc.querySelectorAll("#parts-body tr")].every((r) => Number(r.querySelector(".qty-column").textContent) === 0));
   doc.querySelector('[data-stock-filter="in"]').click();
   check("in-stock filter excludes empty stock lines", !doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`));
   doc.querySelector('[data-stock-filter="review"]').click();

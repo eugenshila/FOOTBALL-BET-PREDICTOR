@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .config import DATA_DIR, settings
+from .config import DATA_DIR, normalize_shop_name, settings
 from .models import ShopProfileUpdate
 
 PROFILE_PATH = DATA_DIR / "shop_profile.json"
@@ -34,12 +34,17 @@ def get_profile() -> dict:
             })
     except (OSError, ValueError, TypeError):
         return profile
+    # A profile saved under a retired brand should not keep the old name in the
+    # header, cards or captions. Custom names are left exactly as the owner set them.
+    profile["shop_name"] = normalize_shop_name(profile["shop_name"])
     return profile
 
 
 def save_profile(update: ShopProfileUpdate) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     profile = update.model_dump()
+    # Keep the saved value consistent with what get_profile() will serve.
+    profile["shop_name"] = normalize_shop_name(profile["shop_name"])
     temporary = PROFILE_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps(profile, indent=2), encoding="utf-8")
     temporary.replace(PROFILE_PATH)

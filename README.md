@@ -41,7 +41,8 @@ The report the engine prints follows the required contract exactly:
   Duplicate OEM rows are skipped by default; existing stock is not overwritten.
 - In the browser workflow, CSV photo paths are deferred. After import, each row
   offers **Find local candidates**, **Approve this photo**, or **Skip / keep
-  current photo**. Inventory's **Photos** button reopens review for any part.
+  current photo**. Inventory's **Review photos** action reopens review for any
+  part.
 - Candidates come from images already in the local reference catalogue or
   inventory, ranked by OEM/cross-reference or similar part-name tokens. This is
   **not live web image search or visual verification**. With no suitable local
@@ -50,7 +51,13 @@ The report the engine prints follows the required contract exactly:
   part's photo, not its OEM, fitment, stock or verification. Existing publishing
   verification gates still apply. No bulk auto-approval.
 - Shop identity defaults to **Verifix**, Jeep / Mopar first; other makes
-  remain supported. `SHOP_NAME` and `SHOP_TAGLINE` still override the defaults.
+  remain supported. `SHOP_NAME` and `SHOP_TAGLINE` still override the defaults;
+  the retired default brands *Trail Vault* and *Shila Auto Parts* are upgraded
+  to Verifix automatically, while genuinely custom names stay unchanged.
+- The inventory table uses fixed, even columns with **one photo per part**.
+  Click the small badge on a photo to add or replace it; the compact icons at
+  the end of a row open the editor, promo cards and photo review. Prices,
+  quantities and dates stay on one line and align down the page.
 
 ### Uploading stock with photos (ZIP)
 
