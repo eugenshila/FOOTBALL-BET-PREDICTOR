@@ -339,3 +339,32 @@ python -m pytest tests -q                      # the same suite against PostgreS
 
 Create `partsid_test` first (`CREATE DATABASE partsid_test;`) — the suite drops
 and recreates its own tables inside it.
+
+### Mobile recovery and local drafts
+
+Verifix remembers the selected app tab and inventory search, stock filter, sort,
+scroll position, and one unfinished part editor per signed-in account on this
+browser/device. Field changes are saved locally as you type; the chosen photo is
+saved separately in IndexedDB. The drawer says when a draft is local: **it is not
+inventory stock until Save part succeeds**. Closing it parks the draft; reopening
+that part resumes it. Opening another part asks before discarding the draft, and
+Discard draft always asks for confirmation. Signing out clears this account's
+local recovery data on the device. Browser storage is not encrypted against
+other users of the same device, and clearing site data removes the draft.
+
+Storage may be disabled, full, or evicted by the browser; heed the warning and
+save to inventory promptly. If a photo cannot be recovered, reselect it before
+saving. If a record was deleted, its draft remains available but cannot update
+the missing record. When a new record was created but its photo upload failed,
+retry updates the same record. If a create request was interrupted before the
+server response arrived, the app blocks retry because it cannot know whether the
+record was created: check inventory, then explicitly discard the draft if needed.
+Completed identification results are not currently retained on reload, and an
+interrupted identification is never restarted automatically.
+
+To run the isolated reload/storage regression suite (Node 18+):
+
+```sh
+npm install --no-save --no-package-lock jsdom@24 fake-indexeddb
+node scripts/draft_recovery_test.cjs
+```
