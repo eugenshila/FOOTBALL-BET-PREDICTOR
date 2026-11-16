@@ -10,7 +10,7 @@ generate WhatsApp-ready promotional cards — in one flow, on a phone, at the co
 ## Verifix workspace
 
 A charcoal-and-warm-yellow interface with responsive navigation, live stock
-overview cards, CSV/ZIP intake and a matching local sign-in screen. Typography
+overview cards, CSV/ZIP/Excel/PDF intake and a matching local sign-in screen. Typography
 and the brand mark are served locally; no external fonts or cloud login are needed.
 Existing `SHOP_NAME=TRAIL VAULT` settings automatically display Verifix; custom
 shop names are preserved. This visual refresh does not migrate or reset inventory,
@@ -145,7 +145,7 @@ For the existing Windows auth-enabled deployment, use the targeted installer and
 ./.venv/bin/python -m app.cli lookup 5184894AA           # counter lookup by OEM/x-ref
 ./.venv/bin/python -m app.cli identify photo.jpg --cards # identify + render cards
 ./.venv/bin/python -m app.cli cards --part-id 2 --formats story,square
-./.venv/bin/python -m app.cli import-csv stock.csv       # dry run, then --apply
+./.venv/bin/python -m app.cli import-csv stock.csv       # CSV dry run, then --apply
 ./.venv/bin/python -m app.cli export-csv --out stock.csv # round-trip export
 ./.venv/bin/python -m app.cli check-db                   # diagnose the database
 ./.venv/bin/python -m app.cli check-providers            # one live call per provider
@@ -180,6 +180,21 @@ TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/partsid_test \
 
 The full suite passes on both engines (95 tests on PostgreSQL, where a few
 engine-specific tests also run).
+
+### Importing stock lists in the web app
+
+The **Stock → Import stock file** button accepts CSV, Excel `.xlsx`, and PDFs with
+selectable text and a recognizable table header. In Excel, use a `Part Name` (or
+`Description`) column and put at most one inserted picture in the `Photo` column
+on each part's row. The dry run reports the row counts and embedded photo count;
+photos are saved and attached when you apply the import. Insert pictures in the
+`Photo` cells using the ordinary **Insert → Pictures** workflow and align each
+picture to its part's row. If parts already exist,
+enable **Update matching OEM records** before selecting the file to attach their
+photos to matching OEM records. That option can replace existing part details.
+
+PDF import reads selectable table text. A scanned PDF needs OCR first, and photos
+should be embedded in an Excel `.xlsx` file rather than a PDF.
 
 ---
 
@@ -351,8 +366,10 @@ required, the importer maps common headers itself:
 ```
 
 In the UI: **Inventory → ⇪ Import CSV** runs the dry run first, shows what would
-happen, and only writes when you press *Apply import*. **⇩ Export** downloads the
-current inventory in the same shape, so it round-trips.
+happen, and only writes when you press *Apply import*. **⇩ CSV Export** downloads
+the current inventory in the same shape, so it round-trips. The **Reports** tab
+shows verified/unverified totals and downloads a workbook with separate
+**Verified** and **Not Verified** sheets.
 
 What it handles from real-world files:
 
@@ -382,6 +399,7 @@ What it handles from real-world files:
 | `GET` | `/api/cards/download/{file}` | Download a rendered PNG |
 | `POST` | `/api/inventory/import?dry_run=&update_existing=` | Import a CSV stock list |
 | `GET` | `/api/inventory.csv` | Export inventory as CSV |
+| `GET` | `/api/inventory-verification.xlsx` | Download verified and unverified inventory on separate Excel sheets |
 | `POST` | `/api/inventory/import?...&mark_verified=true` | Import and mark rows verified |
 | `GET` | `/api/scans` | Scan history |
 | `GET` | `/api/health` · `/api/config` · `/api/stats` | Runtime info (health includes database dialect/version) |

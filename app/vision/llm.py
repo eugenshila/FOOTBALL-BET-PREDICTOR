@@ -183,7 +183,7 @@ class GeminiProvider(_BaseProvider):
     def identify(self, image_bytes: bytes, mime: str = "image/jpeg") -> IdentificationReport:
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model_name}:generateContent?key={self.api_key}"
+            f"{self.model_name}:generateContent"
         )
         payload = {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
@@ -198,8 +198,12 @@ class GeminiProvider(_BaseProvider):
             ],
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
         }
-        with httpx.Client(timeout=TIMEOUT) as client:
-            response = client.post(url, json=payload)
+        with httpx.Client(timeout=TIMEOUT, trust_env=False) as client:
+            response = client.post(
+                url,
+                json=payload,
+                headers={"x-goog-api-key": self.api_key},
+            )
             response.raise_for_status()
             data = response.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]

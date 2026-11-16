@@ -21,6 +21,7 @@
   </div>
   <div class="workspace-breadcrumb"><span>Workspace</span><span class="breadcrumb-slash">/</span><strong>Parts desk</strong></div>
   <div class="topbar-right">
+    <span id="auth-email" class="muted small"></span>
     <span id="provider-badge" class="badge" title="Vision provider in use">…</span>
     <span id="stat-pill" class="pill">…</span>
     <button id="btn-signout" class="btn ghost small-btn" type="button">Sign out</button>
@@ -34,6 +35,8 @@
     <button id="tab-identify" class="tab active" data-view="identify" role="tab" aria-controls="view-identify" aria-selected="true"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3M7 12h10"/><rect x="8" y="8" width="8" height="8" rx="2"/></svg><span>Identify a part</span><span class="nav-dot"></span></button>
     <button id="tab-inventory" class="tab" data-view="inventory" role="tab" aria-controls="view-inventory" aria-selected="false" tabindex="-1"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg><span>Inventory</span></button>
     <button id="tab-studio" class="tab" data-view="studio" role="tab" aria-controls="view-studio" aria-selected="false" tabindex="-1"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m21 15-6-6-7 12m-5-5 5-5 3 3"/></svg><span>Promo studio</span></button>
+    <button id="tab-reports" class="tab" data-view="reports" role="tab" aria-controls="view-reports" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 3h16v18H4zM8 8h8M8 12h8M8 16h5"/></svg><span>Reports</span></button>
+    <button id="tab-settings" class="tab" data-view="settings" role="tab" aria-controls="view-settings" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v10M7 12h10"/></svg><span>Settings</span></button>
   </div>
   <div class="sidebar-foot"><div class="sidebar-emblem"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg></div><strong>Clarity in every part.</strong><p>Genuine parts. Clear inventory.<br />Jeep &amp; Mopar first.</p><span>VERIFIX <span class="muted">/</span> PARTS DESK</span></div>
 </nav>
@@ -49,7 +52,7 @@
   <section class="vault-intro" aria-labelledby="vault-title">
     <div class="intake-copy"><span class="intake-icon"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg></span><div><p class="eyebrow">LESS ADMIN. MORE MOMENTUM.</p><h2 id="vault-title">Your stock list. A running start.</h2><p class="muted">Bring your spreadsheet into Verifix. Review first, import when you’re ready.</p></div></div>
     <button id="csv-dropzone" class="csv-dropzone" type="button">
-      <span class="upload-icon"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span><span><strong>Drop your CSV or stock ZIP</strong><span class="csv-hint">or <span>browse files</span> · CSV 8 MB / ZIP 32 MB</span></span><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      <span class="upload-icon"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span><span><strong>Drop your stock file</strong><span class="csv-hint">or <span>browse files</span> · CSV 8 MB · ZIP 32 MB · Excel/PDF 64 MB</span></span><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
     </button>
   </section>
   <div class="section-heading"><div><h2 id="workspace-title">Identify a part</h2><p id="workspace-description">Start with a photo. Find the details that matter.</p></div><span id="workspace-step" class="workflow-label">PHOTO → REVIEW → STOCK</span></div>
@@ -120,7 +123,8 @@
           <button id="btn-new-part" class="btn primary">＋ New part</button>
           <button id="btn-import" class="btn ghost">⇪ Import stock</button>
           <a id="btn-export" class="btn ghost" href="/api/inventory.csv" download>⇩ Export</a>
-          <input id="csv-input" type="file" accept=".csv,.zip,text/csv,application/zip" hidden />
+          <a id="btn-export-pdf" class="btn ghost" href="/api/inventory.pdf" download>PDF with photos</a>
+          <input id="csv-input" type="file" accept=".csv,.zip,.xlsx,.pdf" hidden />
         </div>
       </div>
       <div class="inventory-filters" role="group" aria-label="Filter inventory">
@@ -129,24 +133,62 @@
         <button type="button" class="filter-chip" data-stock-filter="out" aria-pressed="false">Out of stock</button>
         <button type="button" class="filter-chip" data-stock-filter="review" aria-pressed="false">Needs verification</button>
       </div>
+      <div id="import-block" class="import-block" hidden>
+        <div class="panel-head import-head">
+          <div>
+            <h3 class="sources-title">Import stock file</h3>
+            <p class="muted small import-lead">Review the file first. Nothing is saved until you apply the import.</p>
+          </div>
+          <div class="row gap" id="import-actions"><button id="btn-close-import" class="btn ghost small-btn">Close</button></div>
+        </div>
+        <div class="import-formats" aria-label="Supported file types">
+          <span>CSV</span><span>Stock ZIP</span><span>Excel · XLSX</span><span>Text PDF</span>
+        </div>
+        <div id="stock-dropzone" class="stock-dropzone" tabindex="0" role="button" aria-label="Choose or drop a stock file">
+          <div class="stock-drop-icon" aria-hidden="true">↑</div>
+          <div>
+            <strong>Drop your stock file here</strong>
+            <p class="muted small">or <button type="button" id="btn-pick-stock-file" class="link-button">choose a file</button></p>
+          </div>
+        </div>
+        <p class="import-guidance muted small">For part photos, use an Excel <code>Photo</code> column and insert one picture on each part’s row. PDFs need selectable text; scanned PDFs need OCR first.</p>
+        <label class="check import-update"><input type="checkbox" id="import-update-existing" checked /> Merge matching parts <span class="muted small">Add uploaded quantities to current stock; alternate numbers use the same record</span></label>
+        <div id="import-summary"></div>
+      </div>
       <div class="table-wrap">
         <table class="table">
           <thead>
             <tr>
-              <th>Part</th><th>OEM</th><th>Bin</th><th class="num">Qty</th>
-              <th class="num">Unit price</th><th>Status</th><th class="num">Actions</th>
+              <th>Part</th><th>OEM</th><th>Photo</th><th>Bin</th><th class="num">Qty</th>
+              <th><button id="sort-received" class="table-sort" type="button" aria-label="Sort by date received">Date received ↕</button></th>
+              <th class="num">Price</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody id="parts-body"></tbody>
         </table>
       </div>
-      <p id="parts-empty" class="empty" hidden>No parts match this search or filter. Try another search or choose All parts.</p>
-      <div id="import-block" class="import-block" hidden>
-        <div class="panel-head">
-          <h3 class="sources-title">Stock import</h3>
-          <div class="row gap" id="import-actions"></div>
-        </div>
-        <div id="import-summary"></div>
+      <p id="parts-empty" class="empty" hidden>No parts match that search.</p>
+    </div>
+  </section>
+
+  <!-- ── REPORTS ──────────────────────────────────────────────── -->
+  <section id="view-reports" class="view" role="tabpanel" aria-labelledby="tab-reports">
+    <div class="panel">
+      <div>
+        <h2 class="panel-title">Part verification report</h2>
+        <p class="muted">Review how many inventory records have a confirmed OEM number, then download the full Excel workbook.</p>
+      </div>
+      <div class="report-counts" aria-live="polite">
+        <div class="report-count verified"><strong id="report-verified-count">—</strong><span>Verified parts</span></div>
+        <div class="report-count unverified"><strong id="report-unverified-count">—</strong><span>Not verified</span></div>
+      </div>
+      <p id="report-summary-status" class="status" role="status"></p>
+      <a id="btn-verification-export" class="btn primary" href="/api/inventory-verification.xlsx" download>Download Excel report</a>
+      <p class="muted small">The workbook has separate Verified and Not Verified sheets and includes the part numbers, fitment, stock, and record details.</p>
+      <div class="report-pdf-export">
+        <h3 class="panel-title">Inventory catalogue</h3>
+        <p class="muted small">Download the current parts list as a PDF with attached photos, stock, fitment, and receipt dates.</p>
+        <a id="btn-inventory-pdf-report" class="btn ghost" href="/api/inventory.pdf" download>Download PDF with photos (.pdf)</a>
       </div>
     </div>
   </section>
@@ -163,7 +205,15 @@
     <div class="panel">
       <div class="panel-head">
         <h2 class="panel-title">WhatsApp promo generator</h2>
-        <select id="studio-part" class="input select"></select>
+        <div class="studio-part-picker">
+          <div class="studio-search-row">
+            <input id="studio-search" class="input" type="search" placeholder="Search part name or number…" aria-label="Search promo parts" />
+            <button id="btn-search-part" class="btn ghost" type="button">Search</button>
+          </div>
+          <div id="studio-search-results" class="studio-search-results" role="listbox" aria-label="Part search results" hidden></div>
+          <p id="studio-selected-part" class="studio-selected-part muted small">No part selected</p>
+          <select id="studio-part" class="input select" aria-label="Choose a promo part"></select>
+        </div>
       </div>
       <div class="row gap wrap studio-controls">
         <label class="field grow">
@@ -186,6 +236,44 @@
           <button id="btn-copy" class="btn ghost small-btn">Copy</button>
         </div>
         <pre id="caption-text" class="caption"></pre>
+        <div id="studio-social-links" class="row gap wrap" aria-label="Shop social profile links"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SETTINGS ─────────────────────────────────────────────── -->
+  <section id="view-settings" class="view" role="tabpanel" aria-labelledby="tab-settings">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Shop details &amp; social links</h2>
+          <p class="muted small">These public details appear in generated promo captions. Profile links open your existing pages.</p>
+        </div>
+      </div>
+      <form id="shop-settings-form" class="settings-grid">
+        <label class="field"><span>Shop name</span><input class="input" name="shop_name" maxlength="80" required /></label>
+        <label class="field"><span>Tagline</span><input class="input" name="tagline" maxlength="140" /></label>
+        <label class="field"><span>WhatsApp business number</span><input class="input" name="whatsapp_number" maxlength="40" placeholder="+254 7xx xxx xxx" /></label>
+        <label class="field"><span>Currency</span><input class="input" name="currency" maxlength="8" required /></label>
+        <label class="field span2"><span>Location</span><input class="input" name="location" maxlength="120" /></label>
+        <label class="field"><span>Facebook page URL</span><input class="input" name="facebook" type="url" placeholder="https://facebook.com/your-page" /></label>
+        <label class="field"><span>Instagram profile URL</span><input class="input" name="instagram" type="url" placeholder="https://instagram.com/your-account" /></label>
+        <label class="field"><span>TikTok profile URL</span><input class="input" name="tiktok" type="url" placeholder="https://tiktok.com/@your-account" /></label>
+        <label class="field"><span>X profile URL</span><input class="input" name="x" type="url" placeholder="https://x.com/your-account" /></label>
+        <div class="span2 row gap wrap">
+          <button class="btn primary" type="submit" id="btn-save-settings">Save details</button>
+          <span id="settings-status" class="status" role="status"></span>
+        </div>
+      </form>
+      <div id="settings-social-links" class="row gap wrap" aria-label="Saved external social pages"></div>
+      <div class="settings-note">
+        <strong>Account publishing</strong>
+        <p class="muted small">These links point to your public pages; they do not log in or publish for you. Direct publishing needs a public HTTPS app, approved developer apps and a secure account-connection flow. Do not enter passwords or access tokens here.</p>
+      </div>
+      <div class="settings-note">
+        <strong>Cloud backup</strong>
+        <p class="muted small">A backup script and Windows Task Scheduler setup guide are included with the project. Cloud upload stays disabled until you configure a private S3-compatible bucket and credentials in the local <code>.env</code> file.</p>
+        <a class="btn ghost small-btn" href="/help/cloud-backups" target="_blank" rel="noopener">Read backup setup</a>
       </div>
     </div>
   </section>
@@ -219,6 +307,8 @@
       <label class="field"><span>Fitment — engine / years</span><input class="input" name="fit_engine_years" placeholder="3.6L Pentastar V6 / 2011-2021" /></label>
       <label class="field span2"><span>Service notes (one per line)</span><textarea class="input" name="technical_notes" rows="3"></textarea></label>
       <label class="field span2"><span>Photo path or URL</span><input class="input" name="image_path" placeholder="assets/seed/pcv-valve.jpg" /></label>
+      <label class="field span2"><span>Or choose a photo from your computer</span><input class="input photo-file-input" type="file" name="part_image" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" /></label>
+      <div class="span2 part-photo-preview" id="part-photo-preview" hidden></div>
       <label class="check span2"><input type="checkbox" name="verified" /> Verified — I have confirmed the OEM number against the EPC</label>
     </div>
     <div class="row gap end">

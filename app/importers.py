@@ -356,7 +356,7 @@ def import_csv(
     raw: bytes | str,
     *,
     dry_run: bool = False,
-    update_existing: bool = False,
+    update_existing: bool = True,
     default_currency: str = "KES",
     default_verified: bool = False,
     defer_images: bool = False,
@@ -364,9 +364,9 @@ def import_csv(
 ) -> ImportReport:
     """Import a CSV stock list.
 
-    ``update_existing`` fills in blanks on records that already match an OEM
-    number; it never overwrites prices or quantities of existing stock unless
-    that column is present in the file.
+    ``update_existing`` merges matching OEM/alternate-number rows into the
+    existing database record and adds the uploaded quantity as received stock.
+    A non-matching row creates a new record.
     """
     text = sniff_text(raw) if isinstance(raw, bytes) else raw
     if not text.strip():
@@ -409,24 +409,92 @@ def import_csv(
         report.errors = 1
         return report
 
-    for index, row in enumerate(reader, start=2):  # row 1 is the header
-        report.rows_total += 1
+    source_rows = list(enumerate(reader, start=2))  # row 1 is the header
+    payloads: dict[int, PartCreate] = {}
+    for index, row in source_rows:
         try:
-            payload = _row_to_part(
+            payloads[index] = _row_to_part(
                 row,
                 mapping,
                 default_currency=default_currency,
                 default_verified=default_verified,
             )
         except ImportError_ as exc:
+            report.rows_total += 1
             report.errors += 1
             report.results.append(RowResult(row=index, status="error", message=str(exc)))
-            continue
         except Exception as exc:  # noqa: BLE001 - a bad row must not kill the import
+            report.rows_total += 1
             report.errors += 1
             report.results.append(
                 RowResult(row=index, status="error", message=f"{type(exc).__name__}: {exc}")
             )
+
+    def number_key(number: str) -> str:
+        return re.sub(r"[\s-]+", "", number or "").upper()
+
+    # Inspect the complete worksheet before writing rows. If an OEM number is
+    # listed as another row's alternate/superseded number, treat it as a
+    # reference to that primary row, independent of spreadsheet row order.
+    oem_rows: dict[str, list[int]] = {}
+    for index, payload in payloads.items():
+        key = number_key(payload.oem_part_number)
+        if key:
+            oem_rows.setdefault(key, []).append(index)
+
+    alias_owner: dict[str, tuple[int, str]] = {}
+    for index, payload in payloads.items():
+        owner_key = number_key(payload.oem_part_number)
+        if not owner_key:
+            continue
+        for alternate in [*payload.alternate_numbers, *payload.superseded_numbers]:
+            alias_key = number_key(alternate)
+            if not alias_key or alias_key == owner_key or alias_key not in oem_rows:
+                continue
+            candidate = (index, owner_key)
+            if alias_key not in alias_owner or index < alias_owner[alias_key][0]:
+                alias_owner[alias_key] = candidate
+
+    def canonical_key(key: str) -> str:
+        chain: list[str] = []
+        while key in alias_owner:
+            if key in chain:
+                cycle = chain[chain.index(key):]
+                return min(cycle, key=lambda item: oem_rows[item][0])
+            chain.append(key)
+            key = alias_owner[key][1]
+        return key
+
+    skipped_rows: dict[int, tuple[str, str]] = {}
+    for key, indices in oem_rows.items():
+        root = canonical_key(key)
+        if root != key and root in oem_rows:
+            owner_index = oem_rows[root][0]
+            owner_number = payloads[owner_index].oem_part_number
+            for index in indices:
+                skipped_rows[index] = ("alternate", owner_number)
+        else:
+            for index in indices[1:]:
+                skipped_rows[index] = ("duplicate", payloads[indices[0]].oem_part_number)
+
+    for index, _row in source_rows:
+        if index not in payloads:
+            continue
+        report.rows_total += 1
+        payload = payloads[index]
+        if index in skipped_rows:
+            kind, owner_number = skipped_rows[index]
+            report.skipped += 1
+            message = (
+                f"OEM {payload.oem_part_number} is listed as an alternate/superseded number "
+                f"for {owner_number} in this workbook; it was kept as a reference, not added as a separate part."
+                if kind == "alternate"
+                else f"OEM {payload.oem_part_number} appears more than once in this workbook; only the first row was imported."
+            )
+            report.results.append(RowResult(
+                row=index, status="skipped", part_name=payload.part_name,
+                oem_part_number=payload.oem_part_number, message=message,
+            ))
             continue
 
         if defer_images:
@@ -462,6 +530,7 @@ def import_csv(
                         part_name=payload.part_name,
                         oem_part_number=payload.oem_part_number,
                         part_id=existing.id,
+                        message=f"Matched part #{existing.id}; quantity will increase by {payload.quantity}.",
                     )
                 )
                 continue
@@ -474,6 +543,7 @@ def import_csv(
                     part_name=payload.part_name,
                     oem_part_number=payload.oem_part_number,
                     part_id=existing.id,
+                    message=f"Matched part #{existing.id}; quantity increased by {payload.quantity}.",
                 )
             )
             continue
@@ -506,15 +576,37 @@ def import_csv(
 
 
 def _apply_update(part_id: int, payload: PartCreate, path: Path | None) -> None:
-    """Fill in missing details on an existing record without clobbering stock."""
+    """Merge a restock row into a matching part and add its received quantity."""
     from .models import PartUpdate
 
     current = db.get_part(part_id, path)
     if current is None:
         return
+    def number_key(value: str) -> str:
+        return re.sub(r"[\s-]+", "", value or "").upper()
+
+    alternates = list(current.alternate_numbers)
+    incoming_oem = payload.oem_part_number.strip()
+    if incoming_oem and number_key(incoming_oem) != number_key(current.oem_part_number):
+        alternates.append(incoming_oem)
+    alternates.extend(payload.alternate_numbers)
+    unique_alternates: list[str] = []
+    for number in alternates:
+        if number and number_key(number) != number_key(current.oem_part_number) and not any(
+            number_key(number) == number_key(saved) for saved in unique_alternates
+        ):
+            unique_alternates.append(number)
+
+    superseded = list(current.superseded_numbers)
+    superseded.extend(payload.superseded_numbers)
+    unique_superseded: list[str] = []
+    for number in superseded:
+        if number and not any(number_key(number) == number_key(saved) for saved in unique_superseded):
+            unique_superseded.append(number)
+
     patch = PartUpdate(
-        alternate_numbers=payload.alternate_numbers or None,
-        superseded_numbers=payload.superseded_numbers or None,
+        alternate_numbers=unique_alternates or None,
+        superseded_numbers=unique_superseded or None,
         fitment=payload.fitment or None,
         bin_location=payload.bin_location or None,
         category=payload.category or None,
@@ -525,6 +617,14 @@ def _apply_update(part_id: int, payload: PartCreate, path: Path | None) -> None:
         verified=True if payload.verified else None,
     )
     db.update_part(part_id, patch, path=path)
+    if payload.quantity > 0:
+        db.adjust_stock(
+            part_id,
+            payload.quantity,
+            reason="import_restock",
+            note="quantity added from uploaded stock file",
+            path=path,
+        )
 
 
 def export_csv(path: Path | None = None) -> str:

@@ -104,7 +104,11 @@ class GeminiGroundedProvider:
 
     def _post(self, body: dict[str, Any]) -> httpx.Response:
         url = ENDPOINT.format(model=self.model_name)
-        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+        with httpx.Client(
+            timeout=self._timeout,
+            transport=self._transport,
+            trust_env=False,
+        ) as client:
             return client.post(
                 url,
                 json=body,

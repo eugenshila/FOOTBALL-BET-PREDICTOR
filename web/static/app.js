@@ -11,6 +11,7 @@ const state = {
   selectedFile: null,
   lastScan: null,
   currentPart: null,
+  receivedSort: 0,
 };
 
 /* ── tiny helpers ─────────────────────────────────────────── */
@@ -27,6 +28,81 @@ const escapeHtml = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[ch]));
+
+const SOCIAL_PLATFORMS = [
+  ["facebook", "Facebook"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["x", "X"],
+];
+
+function populateShopSettings(profile) {
+  const form = $("#shop-settings-form");
+  if (!form || !profile) return;
+  for (const key of ["shop_name", "tagline", "whatsapp_number", "currency", "location"]) {
+    form.elements[key].value = profile[key] || "";
+  }
+  for (const [key] of SOCIAL_PLATFORMS) {
+    form.elements[key].value = profile.social_links?.[key] || "";
+  }
+  renderSocialLinks($("#settings-social-links"), profile.social_links);
+}
+
+function renderSocialLinks(container, links = {}) {
+  if (!container) return;
+  const active = SOCIAL_PLATFORMS.filter(([key]) => links[key]);
+  container.innerHTML = active.map(([key, label]) =>
+    `<a class="btn ghost small-btn" href="${escapeHtml(links[key])}" target="_blank" rel="noopener noreferrer">Open ${label}</a>`
+  ).join("");
+  container.hidden = active.length === 0;
+}
+
+async function saveShopSettings(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#btn-save-settings");
+  const status = $("#settings-status");
+  const values = new FormData(form);
+  const payload = {
+    shop_name: values.get("shop_name").trim(),
+    tagline: values.get("tagline").trim(),
+    whatsapp_number: values.get("whatsapp_number").trim(),
+    currency: values.get("currency").trim(),
+    location: values.get("location").trim(),
+    social_links: Object.fromEntries(SOCIAL_PLATFORMS.map(([key]) => [key, values.get(key).trim()])),
+  };
+  button.disabled = true;
+  button.textContent = "Saving…";
+  status.textContent = "";
+  try {
+    const profile = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+    state.config = { ...state.config, ...profile };
+    $("#shop-name").textContent = profile.shop_name;
+    $("#shop-tagline").textContent = profile.tagline;
+    renderSocialLinks($("#settings-social-links"), profile.social_links);
+    renderSocialLinks($("#studio-social-links"), profile.social_links);
+    status.className = "status";
+    status.textContent = "Saved on this computer. New promo captions will use these details.";
+    toast("Shop details saved");
+  } catch (error) {
+    status.className = "status error";
+    status.textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save details";
+  }
+}
+
+// Remote catalog thumbnails can expire or block hotlinking. Keep the inventory
+// usable and give the owner a clear, replaceable placeholder instead.
+document.addEventListener("error", (event) => {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement) || img.dataset.fallbackApplied) return;
+  img.dataset.fallbackApplied = "true";
+  const fallback = document.createElement("span");
+  fallback.className = `image-fallback${img.classList.contains("match-photo") ? " large" : ""}${img.closest(".card-item") ? " card-fallback" : ""}`;
+  fallback.textContent = "Photo unavailable";
+  if (img.closest(".part-photo-link")) img.closest(".part-photo-link").replaceWith(fallback);
+  else img.replaceWith(fallback);
+}, true);
 
 function toast(message, isError = false) {
   const el = $("#toast");
@@ -104,10 +180,13 @@ function renderMarkdown(markdown) {
 /* ── boot ─────────────────────────────────────────────────── */
 async function boot() {
   try {
-    const [config, health, stats] = await Promise.all([
-      api("/api/config"), api("/api/health"), api("/api/stats"),
+    const [config, health, stats, session] = await Promise.all([
+      api("/api/config"), api("/api/health"), api("/api/stats"), api("/api/auth/session"),
     ]);
+    $("#auth-email").textContent = session.email || "";
     state.config = config;
+    populateShopSettings(config);
+    renderSocialLinks($("#studio-social-links"), config.social_links);
     $("#shop-name").textContent = config.shop_name;
     document.title = `${config.shop_name} — Parts workspace`;
     $("#shop-tagline").textContent = config.tagline;
@@ -329,7 +408,7 @@ function renderMatch(result) {
 
   body.innerHTML = `
     <div class="match-card">
-      ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(part.part_name)}" />` : ""}
+      ${imageUrl ? `<img class="match-photo" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(part.part_name)}" />` : '<div class="image-fallback large">No photo added</div>'}
       <div>
         <div class="part-name">${escapeHtml(part.part_name)}</div>
         <div class="kv">
@@ -377,6 +456,7 @@ function renderMatch(result) {
 
 function mediaUrl(path) {
   if (!path) return "";
+  if (/^https?:\/\//i.test(path)) return path;
   const normalized = String(path).replace(/\\/g, "/");
   if (normalized.startsWith("/media/") || normalized.startsWith("/api/demo-image/")) return normalized;
   const file = normalized.split("/").pop();
@@ -411,6 +491,7 @@ async function loadParts(query = "") {
   try {
     state.parts = await api(`/api/parts?q=${encodeURIComponent(query)}`);
     renderParts();
+    populateStudioSelect();
     const stats = await api("/api/stats");
     renderStats(stats);
   } catch (error) {
@@ -427,14 +508,27 @@ function renderParts() {
     return true;
   });
   $("#inventory-count").textContent = parts.length;
+  if (state.receivedSort) {
+    parts.sort((a, b) => {
+      const aDate = a.last_received_at ? Date.parse(a.last_received_at) : null;
+      const bDate = b.last_received_at ? Date.parse(b.last_received_at) : null;
+      if (aDate === null) return bDate === null ? 0 : 1;
+      if (bDate === null) return -1;
+      return state.receivedSort * (aDate - bDate);
+    });
+  }
   $("#parts-empty").hidden = parts.length > 0;
   body.innerHTML = parts.map((part) => {
+    const photoUrl = mediaUrl(part.image_path);
     const status = part.quantity <= 0
       ? '<span class="tag out">out</span>'
       : part.quantity <= 3
         ? `<span class="tag low">low · ${part.quantity}</span>`
         : `<span class="tag in">in stock</span>`;
     const verified = part.verified ? "" : ' <span class="tag unverified">unverified</span>';
+    const received = part.last_received_at
+      ? new Date(part.last_received_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : "—";
     return `<tr data-id="${part.id}">
       <td><div class="part-cell">
         ${mediaUrl(part.image_path) ? `<img class="part-thumb" src="${escapeHtml(mediaUrl(part.image_path))}" alt="" loading="lazy" />` : '<span class="part-placeholder" aria-hidden="true">◇</span>'}
@@ -442,8 +536,14 @@ function renderParts() {
         <div class="part-sub">${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}</div></div>
       </div></td>
       <td class="mono">${escapeHtml(part.oem_part_number || "—")}</td>
+      <td>
+        <input class="part-photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${part.id}" hidden />
+        <button class="btn tiny" type="button" data-photo="${part.id}" title="${part.image_path ? "Replace" : "Add"} this part's photo">${part.image_path ? "Replace photo" : "Add photo"}</button>
+        ${photoUrl ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View current photo"><img class="part-photo-thumb" src="${escapeHtml(photoUrl)}" alt="Photo of ${escapeHtml(part.part_name)}" /></a>` : (part.image_path ? '<span class="image-fallback">Photo unavailable</span>' : "")}
+      </td>
       <td>${escapeHtml(part.bin_location || "—")}</td>
       <td class="num">${part.quantity}</td>
+      <td title="Latest recorded positive stock movement">${escapeHtml(received)}</td>
       <td class="num">${escapeHtml(money(part.unit_price, part.currency))}</td>
       <td>${status}${verified}</td>
       <td class="num">
@@ -453,6 +553,27 @@ function renderParts() {
       </td>
     </tr>`;
   }).join("");
+
+  $$('[data-photo]', body).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    body.querySelector(`[data-photo-input="${button.dataset.photo}"]`)?.click();
+  }));
+  $$('[data-photo-input]', body).forEach((input) => input.addEventListener("change", async (event) => {
+    event.stopPropagation();
+    const file = input.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await api(`/api/parts/${input.dataset.photo}/image`, { method: "POST", body: formData });
+      toast("Photo saved to part");
+      await loadParts($("#search").value);
+    } catch (error) {
+      toast(error.message, true);
+      input.value = "";
+    }
+  }));
+  $$(".part-photo-link", body).forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
 
   $$("[data-card]", body).forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -473,6 +594,12 @@ function renderParts() {
     if (record) openDrawer(record);
   }));
 }
+
+$("#sort-received")?.addEventListener("click", () => {
+  state.receivedSort = state.receivedSort === -1 ? 1 : -1;
+  $("#sort-received").textContent = state.receivedSort === -1 ? "Date received ↓" : "Date received ↑";
+  renderParts();
+});
 
 /* ── drawer / form ────────────────────────────────────────── */
 function openDrawer(prefill = {}) {
@@ -500,6 +627,8 @@ function openDrawer(prefill = {}) {
     const field = form.elements[key];
     if (field) field.value = value;
   });
+  form.elements.part_image.value = "";
+  renderDrawerPhoto(prefill.image_path || "");
   form.elements.verified.checked = Boolean(prefill.verified);
   $("#drawer").hidden = false;
   form.elements.part_name.focus();
@@ -507,11 +636,34 @@ function openDrawer(prefill = {}) {
 
 function closeDrawer() { $("#drawer").hidden = true; }
 
+function renderDrawerPhoto(path, localFile = null) {
+  const preview = $("#part-photo-preview");
+  if (localFile) {
+    preview.innerHTML = `<span class="muted small">Selected photo: ${escapeHtml(localFile.name)}</span><br><img class="drawer-photo-preview" src="${URL.createObjectURL(localFile)}" alt="Selected part photo preview" />`;
+    preview.hidden = false;
+  } else if (path) {
+    preview.innerHTML = `<span class="muted small">Current photo</span><br><img class="drawer-photo-preview" src="${escapeHtml(mediaUrl(path))}" alt="Current part photo" />`;
+    preview.hidden = false;
+  } else {
+    preview.innerHTML = "";
+    preview.hidden = true;
+  }
+}
+
+$("#part-form").elements.part_image.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  const path = $("#part-form").elements.image_path.value;
+  renderDrawerPhoto(path, file || null);
+});
+
 const splitList = (value) => String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
 
 async function savePart(event) {
   event.preventDefault();
   const form = event.target;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton?.disabled) return;
+  if (submitButton) { submitButton.disabled = true; submitButton.textContent = "Saving…"; }
   const get = (name) => form.elements[name]?.value ?? "";
   const id = get("id");
   const makeModel = get("fit_make_model").trim();
@@ -539,18 +691,36 @@ async function savePart(event) {
   };
 
   try {
+    let saved;
     if (id) {
-      await api(`/api/parts/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-      toast("Part updated");
+      saved = await api(`/api/parts/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
     } else {
-      const created = await api("/api/parts", { method: "POST", body: JSON.stringify(payload) });
-      toast(`Added part #${created.id}`);
+      saved = await api("/api/parts", { method: "POST", body: JSON.stringify(payload) });
+      form.elements.id.value = saved.id;
+      $("#drawer-title").textContent = `Part #${saved.id}`;
+    }
+    const photo = form.elements.part_image.files?.[0];
+    if (photo) {
+      const imageForm = new FormData();
+      imageForm.append("file", photo);
+      saved = await api(`/api/parts/${saved.id}/image`, { method: "POST", body: imageForm });
     }
     closeDrawer();
     await loadParts($("#search").value);
+    let successMessage = id ? "Part updated" : `Added part #${saved.id}`;
+    if (id && !state.parts.some((part) => part.id === Number(id))) {
+      // Editing a name can make a row stop matching the active old-name search.
+      // Clear that filter so the saved record remains visible after the update.
+      $("#search").value = "";
+      await loadParts("");
+      successMessage = "Part updated — search cleared to show the renamed record";
+    }
+    toast(successMessage);
     populateStudioSelect();
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    if (submitButton) { submitButton.disabled = false; submitButton.textContent = "Save part"; }
   }
 }
 
@@ -558,16 +728,61 @@ async function savePart(event) {
 function populateStudioSelect() {
   const select = $("#studio-part");
   const previous = select.value;
-  select.innerHTML = state.parts
-    .map((p) => `<option value="${p.id}">${escapeHtml(p.part_name)} — ${escapeHtml(p.oem_part_number || "no OEM")}${p.verified ? "" : " (unverified)"}</option>`)
-    .join("");
-  if (previous) select.value = previous;
+  select.innerHTML = state.parts.map((part) =>
+    `<option value="${part.id}">${escapeHtml(part.part_name)} · ${escapeHtml(part.oem_part_number || "no OEM")}</option>`
+  ).join("");
+  if (state.parts.some((part) => String(part.id) === previous)) select.value = previous;
+}
+
+function setStudioPart(part) {
+  if (!state.parts.some((item) => item.id === part.id)) state.parts.unshift(part);
+  const select = $("#studio-part");
+  if (![...select.options].some((option) => option.value === String(part.id))) {
+    const option = document.createElement("option");
+    option.value = String(part.id);
+    option.textContent = `${part.part_name} · ${part.oem_part_number || "no OEM"}`;
+    select.append(option);
+  }
+  select.value = String(part.id);
+  $("#studio-selected-part").textContent = `${part.part_name} · ${part.oem_part_number || "no OEM number"}`;
+  $("#studio-search-results").hidden = true;
+  $("#studio-search-results").innerHTML = "";
+}
+
+async function searchStudioParts() {
+  const query = $("#studio-search").value.trim();
+  const results = $("#studio-search-results");
+  if (!query) {
+    toast("Enter a part name or number to search", true);
+    $("#studio-search").focus();
+    return;
+  }
+  const button = $("#btn-search-part");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  try {
+    const matches = await api(`/api/parts?q=${encodeURIComponent(query)}&limit=1000`);
+    results.hidden = false;
+    results.innerHTML = matches.length
+      ? matches.map((part) => `<button class="btn ghost studio-search-result" type="button" role="option" data-studio-result="${part.id}"><strong>${escapeHtml(part.part_name)}</strong><small>${escapeHtml(part.oem_part_number || "No OEM number")} · ${part.quantity} in stock</small></button>`).join("")
+      : '<span class="muted small">No matching parts found.</span>';
+    $$('[data-studio-result]', results).forEach((resultButton) => resultButton.addEventListener("click", () => {
+      const part = matches.find((item) => item.id === Number(resultButton.dataset.studioResult));
+      if (part) setStudioPart(part);
+    }));
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Search";
+  }
 }
 
 function openStudioFor(partId) {
   switchView("studio");
   populateStudioSelect();
-  $("#studio-part").value = String(partId);
+  const part = state.parts.find((item) => item.id === partId);
+  if (part) setStudioPart(part);
   generateCards();
 }
 
@@ -580,17 +795,26 @@ async function generateCards() {
   const status = $("#studio-status");
   status.className = "status busy";
   status.textContent = "Rendering cards…";
+  const generateButton = $("#btn-generate");
+  generateButton.disabled = true;
 
   try {
+    // Always load the current database record before generating. The inventory
+    // list/search result can be stale after verification or an edit.
+    const part = await api(`/api/parts/${encodeURIComponent(partId)}`);
+    setStudioPart(part);
     const result = await api("/api/cards", {
       method: "POST",
       body: JSON.stringify({
-        part_id: Number(partId),
+        part_id: part.id,
         formats,
         headline: $("#studio-headline").value.trim(),
       }),
     });
     const output = $("#card-output");
+    renderSocialLinks($("#studio-social-links"), state.config?.social_links);
+    $("#caption-block").hidden = false;
+    $("#caption-text").textContent = result.caption;
     output.innerHTML = result.cards.map((card) => `
       <div class="card-item">
         <a href="${escapeHtml(card.url)}" target="_blank" rel="noopener">
@@ -610,26 +834,23 @@ async function generateCards() {
     status.className = "status error";
     status.textContent = error.message;
     toast(error.message, true);
+  } finally {
+    generateButton.disabled = false;
   }
 }
 
-/* ── CSV import ───────────────────────────────────────────── */
-let pendingCsv = null;
-let csvBusy = false;
+/* ── stock file import ────────────────────────────────────── */
+let pendingStockFile = null;
+let pendingUpdateExisting = false;
+let stockImportInProgress = false;
 
-async function sendCsv(file, dryRun) {
-  if (csvBusy) return;
+async function sendStockFile(file, dryRun, updateExisting = false) {
+  if (stockImportInProgress) return;
+  if (!/\.(csv|zip|xlsx|pdf)$/i.test(file.name)) { toast("Choose a CSV, ZIP, Excel or PDF stock file", true); return; }
   switchView("inventory");
-  const isZip = /\.zip$/i.test(file.name);
-  if (!/\.(csv|zip)$/i.test(file.name) || file.size > (isZip ? 32 : 8) * 1024 * 1024) {
-    toast("Choose a CSV up to 8 MB or a ZIP up to 32 MB.", true);
-    return;
-  }
-  csvBusy = true;
-  pendingCsv = null;
+  stockImportInProgress = true;
+  pendingStockFile = null;
   $("#import-actions").innerHTML = "";
-  $("#csv-dropzone").disabled = true;
-  $("#btn-import").disabled = true;
   const block = $("#import-block");
   const summary = $("#import-summary");
   block.hidden = false;
@@ -639,30 +860,34 @@ async function sendCsv(file, dryRun) {
   form.append("file", file);
 
   try {
-    const query = `?dry_run=${dryRun}&update_existing=false&review_images=true`;
+    const query = `?dry_run=${dryRun}&update_existing=${updateExisting}&review_images=true`;
     const result = await api(`/api/inventory/import${query}`, { method: "POST", body: form });
-    renderImportSummary(result, file, dryRun);
+    renderImportSummary(result, file, dryRun, updateExisting);
     if (!dryRun) {
-      pendingCsv = null;
+      pendingStockFile = null;
       await loadParts($("#search").value);
       populateStudioSelect();
       toast(`Imported ${result.created} part(s)`);
       showImageReview(result.results.filter((r) => r.part_id));
     } else {
-      pendingCsv = file;
+      pendingStockFile = file;
+      pendingUpdateExisting = updateExisting;
     }
   } catch (error) {
     summary.innerHTML = `<p class="status error">${escapeHtml(error.message)}</p>`;
+    const applyButton = $("#btn-apply-import");
+    if (applyButton) { applyButton.disabled = false; applyButton.textContent = "Apply import"; }
   } finally {
-    csvBusy = false;
-    $("#csv-dropzone").disabled = false;
-    $("#btn-import").disabled = false;
+    stockImportInProgress = false;
   }
 }
 
-function renderImportSummary(result, file, dryRun) {
+function renderImportSummary(result, file, dryRun, mergeMatches) {
   const summary = $("#import-summary");
   const actions = $("#import-actions");
+  const aliasRows = (result.results || []).filter((row) =>
+    row.status === "skipped" && row.message.includes("alternate/superseded number")
+  );
   const stat = (label, value, cls = "") =>
     `<div class="${cls}"><strong>${value}</strong>${label}</div>`;
 
@@ -671,10 +896,13 @@ function renderImportSummary(result, file, dryRun) {
     ${result.bundle ? `<p class="status">${result.bundle.images_matched} images matched by part number · ${result.bundle.images_missing} rows without an image · ${result.bundle.unused_images.length} unused images. Photos require individual approval.${result.bundle.test_only ? " TEST PACKAGE: these images are labelled placeholders, not part photos." : ""}</p>` : ""}
     <div class="import-stats">
       ${stat("new parts", result.created, "good")}
-      ${stat("updated", result.updated)}
+      ${stat(mergeMatches ? "matched · qty added" : "updated", result.updated)}
       ${stat("already in stock", result.skipped)}
       ${stat("problems", result.errors, result.errors ? "bad" : "")}
     </div>
+    ${mergeMatches ? '<p class="import-cols">Matching OEM or alternate numbers use the existing part record; uploaded quantities are added to current stock. The Excel file is not changed.</p>' : ""}
+    ${result.images_found ? `<p class="import-cols">${dryRun ? `${result.images_found} embedded photo(s) found` : `${result.images_pending || 0} photo(s) awaiting individual approval`}</p>` : ""}
+    ${aliasRows.length ? `<p class="import-cols">${aliasRows.length} row(s) whose OEM number is listed as an alternate/superseded number were kept as references and not added as separate parts: ${aliasRows.slice(0, 8).map((row) => `row ${row.row} · ${escapeHtml(row.oem_part_number)}`).join(", ")}${aliasRows.length > 8 ? ", …" : ""}</p>` : ""}
     ${result.problems.length ? `<ul class="import-problems">${result.problems.map((p) => `<li>row ${p.row}: ${escapeHtml(p.message)}</li>`).join("")}</ul>` : ""}
     <p class="import-cols">Columns mapped: ${Object.entries(result.columns_mapped).map(([from, to]) => `${escapeHtml(from)} → ${escapeHtml(to)}`).join(", ") || "none"}${result.ignored_columns.length ? ` · ignored: ${result.ignored_columns.map(escapeHtml).join(", ")}` : ""}</p>`;
 
@@ -686,12 +914,16 @@ function renderImportSummary(result, file, dryRun) {
     : `<button class="btn ghost small-btn" id="btn-cancel-import">Dismiss</button>`;
 
   if (dryRun) {
-    $("#btn-apply-import").addEventListener("click", () => {
-      if (pendingCsv) sendCsv(pendingCsv, false);
+    $("#btn-apply-import").addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      if (stockImportInProgress) return;
+      button.disabled = true;
+      button.textContent = "Importing…";
+      if (pendingStockFile) sendStockFile(pendingStockFile, false, pendingUpdateExisting);
     });
   }
   $("#btn-cancel-import").addEventListener("click", () => {
-    pendingCsv = null;
+    pendingStockFile = null;
     $("#import-block").hidden = true;
     $("#csv-input").value = "";
   });
@@ -744,7 +976,30 @@ function showImageReview(rows) {
   }));
 }
 
+function chooseStockFile(file) {
+  if (file) sendStockFile(file, true, $("#import-update-existing").checked);
+}
+
+function openImportPanel() {
+  const block = $("#import-block");
+  block.hidden = false;
+  block.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+}
+
 /* ── navigation ───────────────────────────────────────────── */
+async function loadVerificationSummary() {
+  const status = $("#report-summary-status");
+  status.textContent = "Loading verification totals…";
+  try {
+    const stats = await api("/api/stats");
+    $("#report-verified-count").textContent = Number(stats.verified_parts || 0).toLocaleString();
+    $("#report-unverified-count").textContent = Number(stats.unverified_parts || 0).toLocaleString();
+    status.textContent = `${Number(stats.parts || 0).toLocaleString()} inventory records`;
+  } catch (error) {
+    status.textContent = `Could not load report totals: ${error.message}`;
+  }
+}
+
 function switchView(name) {
   $$(".tab").forEach((tab) => {
     const selected = tab.dataset.view === name;
@@ -755,6 +1010,8 @@ function switchView(name) {
   const descriptions = {
     identify: ["Identify a part", "Start with a photo. Find the details that matter.", "PHOTO → REVIEW → STOCK"],
     inventory: ["Your inventory", "Every OEM number, shelf and stock level. In one place.", "FIND → VERIFY → ORGANISE"],
+    reports: ["Reports", "Verification and inventory exports for your shop.", "REVIEW → EXPORT"],
+    settings: ["Shop settings", "Your business details and public social profiles.", "EDIT → SAVE"],
     studio: ["Promo studio", "Turn verified stock into something worth sharing.", "CHOOSE → CREATE → SHARE"],
   };
   const [title, description, workflow] = descriptions[name] || descriptions.identify;
@@ -763,6 +1020,7 @@ function switchView(name) {
   $("#workspace-step").textContent = workflow;
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === `view-${name}`));
   if (name === "inventory") loadParts($("#search").value);
+  if (name === "reports") loadVerificationSummary();
   if (name === "studio") populateStudioSelect();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -805,6 +1063,7 @@ function wireUi() {
       window.location.assign("/login");
     } catch (error) { toast(error.message, true); }
   });
+  $("#shop-settings-form").addEventListener("submit", saveShopSettings);
   $("#part-form").addEventListener("submit", savePart);
   $$("[data-close]").forEach((el) => el.addEventListener("click", closeDrawer));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
@@ -821,17 +1080,48 @@ function wireUi() {
   }));
   csvZone.addEventListener("drop", (event) => {
     const file = event.dataTransfer?.files[0];
-    if (file) sendCsv(file, true);
+    if (file) chooseStockFile(file);
   });
   $("#close-image-review").addEventListener("click", () => { $("#image-review").hidden = true; });
-  $("#btn-import").addEventListener("click", () => $("#csv-input").click());
+  $("#btn-import").addEventListener("click", openImportPanel);
+  $("#btn-close-import").addEventListener("click", () => { $("#import-block").hidden = true; });
+  $("#btn-pick-stock-file").addEventListener("click", (event) => {
+    event.stopPropagation();
+    $("#csv-input").click();
+  });
+  $("#import-update-existing").addEventListener("change", (event) => {
+    pendingUpdateExisting = event.target.checked;
+  });
   $("#csv-input").addEventListener("change", (event) => {
     const file = event.target.files[0];
-    if (file) sendCsv(file, true);
+    chooseStockFile(file);
     event.target.value = "";
   });
+  const stockDropzone = $("#stock-dropzone");
+  stockDropzone.addEventListener("click", () => $("#csv-input").click());
+  stockDropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("#csv-input").click(); }
+  });
+  ["dragenter", "dragover"].forEach((type) => stockDropzone.addEventListener(type, (event) => {
+    event.preventDefault(); stockDropzone.classList.add("dragover");
+  }));
+  ["dragleave", "drop"].forEach((type) => stockDropzone.addEventListener(type, (event) => {
+    event.preventDefault(); stockDropzone.classList.remove("dragover");
+  }));
+  stockDropzone.addEventListener("drop", (event) => {
+    const files = event.dataTransfer.files;
+    if (files.length > 1) { toast("Choose one stock file at a time", true); return; }
+    chooseStockFile(files[0]);
+  });
+  $("#studio-part").addEventListener("change", () => {
+    const part = state.parts.find((item) => String(item.id) === $("#studio-part").value);
+    if (part) setStudioPart(part);
+  });
   $("#btn-generate").addEventListener("click", generateCards);
-  $("#studio-part").addEventListener("change", () => { /* wait for the button */ });
+  $("#btn-search-part").addEventListener("click", searchStudioParts);
+  $("#studio-search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); searchStudioParts(); }
+  });
   $("#btn-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText($("#caption-text").textContent);

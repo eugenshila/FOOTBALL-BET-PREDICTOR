@@ -44,6 +44,11 @@ def connect(path: Path | str | None = None) -> Iterator[storage.Connection]:
 
 
 def _row_to_part(row: Any) -> InventoryPart:
+    image_path = row["image_path"] or ""
+    # Stock sheets often contain Windows-style relative paths (uploads\photo.jpg).
+    # Keep them portable so the UI and media URL mapper can serve the stored file.
+    if image_path and "://" not in image_path:
+        image_path = image_path.replace("\\", "/")
     return InventoryPart(
         id=row["id"],
         part_name=row["part_name"],
@@ -58,10 +63,15 @@ def _row_to_part(row: Any) -> InventoryPart:
         currency=row["currency"] or "KES",
         category=row["category"] or "",
         technical_notes=json.loads(row["technical_notes"] or "[]"),
-        image_path=row["image_path"] or "",
+        image_path=image_path,
         verified=bool(row["verified"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        last_received_at=(
+            datetime.fromisoformat(row["last_received_at"])
+            if "last_received_at" in row.keys() and row["last_received_at"]
+            else None
+        ),
     )
 
 
@@ -83,7 +93,10 @@ def list_parts(
 ) -> list[InventoryPart]:
     with connect(path) as conn:
         like = conn.like
-        sql = "SELECT * FROM parts"
+        sql = """SELECT parts.*,
+                    (SELECT MAX(m.created_at) FROM movements m
+                     WHERE m.part_id = parts.id AND m.delta > 0) AS last_received_at
+                 FROM parts"""
         clauses: list[str] = []
         params: list[object] = []
         if query:
@@ -330,7 +343,9 @@ def stats(*, path: Path | str | None = None) -> dict[str, object]:
         totals = conn.execute(
             "SELECT COUNT(*) AS parts, COALESCE(SUM(quantity),0) AS units, "
             "COALESCE(SUM(quantity*unit_price),0) AS value, "
-            "COALESCE(SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END),0) AS out_of_stock "
+            "COALESCE(SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END),0) AS out_of_stock, "
+            "COALESCE(SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END),0) AS verified_parts, "
+            "COALESCE(SUM(CASE WHEN verified = 0 THEN 1 ELSE 0 END),0) AS unverified_parts "
             "FROM parts"
         ).fetchone()
         scans = conn.execute("SELECT COUNT(*) AS c FROM scans").fetchone()
@@ -339,5 +354,7 @@ def stats(*, path: Path | str | None = None) -> dict[str, object]:
         "units": int(totals["units"]),
         "inventory_value": round(float(totals["value"]), 2),
         "out_of_stock": int(totals["out_of_stock"]),
+        "verified_parts": int(totals["verified_parts"]),
+        "unverified_parts": int(totals["unverified_parts"]),
         "scans": int(scans["c"]),
     }

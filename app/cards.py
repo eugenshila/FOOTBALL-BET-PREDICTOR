@@ -28,6 +28,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from .config import BASE_DIR, FONT_DIR, settings
 from .formatting import money, stock_label, truncate
 from .models import InventoryPart
+from .shop_profile import get_profile
 
 # --- theme -----------------------------------------------------------------
 BG_TOP = (24, 26, 30)
@@ -858,17 +859,27 @@ def caption_for(part: InventoryPart, ctx: CardContext | None = None) -> str:
         lines.append(f"🏷️ Condition: {part.condition.value}")
     if part.bin_location:
         lines.append(f"📍 Shelf: {part.bin_location}")
+    social_links = get_profile().get("social_links", {})
+    active_links = [
+        (label, social_links.get(key, ""))
+        for key, label in (("facebook", "Facebook"), ("instagram", "Instagram"), ("tiktok", "TikTok"), ("x", "X"))
+        if social_links.get(key)
+    ]
     lines.extend(
         [
             "",
             f"👉 WhatsApp to order: {ctx.phone}",
             f"🏪 {ctx.shop} · {ctx.location}",
-            "",
-            "#SpareParts #AutoParts #" + "".join(
-                w for w in truncate(part.part_name, 40).title() if w.isalnum()
-            ),
         ]
     )
+    if active_links:
+        lines.extend(["", "Follow VERIFIX:", *(f"{label}: {url}" for label, url in active_links)])
+    lines.extend([
+        "",
+        "#SpareParts #AutoParts #" + "".join(
+            w for w in truncate(part.part_name, 40).title() if w.isalnum()
+        ),
+    ])
     return "\n".join(lines)
 
 

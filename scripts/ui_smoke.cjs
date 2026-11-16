@@ -284,9 +284,9 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   const inventoryTab = doc.querySelector("#tab-inventory");
   inventoryTab.focus();
   inventoryTab.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
-  check("keyboard navigation selects promo studio",
-    doc.activeElement.id === "tab-studio" && doc.querySelector("#tab-studio").getAttribute("aria-selected") === "true"
-    && doc.querySelector("#workspace-title").textContent === "Promo studio");
+  check("keyboard navigation selects the last workspace tab",
+    doc.activeElement.id === "tab-settings" && doc.querySelector("#tab-settings").getAttribute("aria-selected") === "true"
+    && doc.querySelector("#workspace-title").textContent === "Shop settings");
   doc.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
   check("Home selects the first workspace tab",
     doc.activeElement.id === "tab-identify" && doc.querySelector("#tab-identify").tabIndex === 0
@@ -298,7 +298,7 @@ async function waitFor(label, fn, timeout = 25000, interval = 120) {
   doc.querySelector('[data-stock-filter="out"]').click();
   check("out-of-stock filter shows only empty stock lines",
     Boolean(doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`))
-      && [...doc.querySelectorAll("#parts-body tr")].every((r) => Number(r.querySelectorAll("td")[3].textContent) === 0));
+      && [...doc.querySelectorAll("#parts-body tr")].every((r) => Number(r.querySelectorAll("td")[4].textContent) === 0));
   doc.querySelector('[data-stock-filter="in"]').click();
   check("in-stock filter excludes empty stock lines", !doc.querySelector(`#parts-body tr[data-id="${filterProbe.id}"]`));
   doc.querySelector('[data-stock-filter="review"]').click();
