@@ -1,4 +1,4 @@
-.PHONY: install install-pg run test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export clean
+.PHONY: install install-pg run test test-pg check-db check-providers ui-test cards cli import load-stock reset-db export backup clean
 
 install:
 	python3 -m venv .venv
@@ -49,6 +49,10 @@ import:
 
 export:
 	./.venv/bin/python -m app.cli export-csv --out inventory.csv
+
+# Back up database + part photos locally (./backups) and to the cloud (if configured)
+backup:
+	./.venv/bin/python -m app.cli backup
 
 clean:
 	rm -rf __pycache__ app/__pycache__ tests/__pycache__ .pytest_cache uploads/* exports/*

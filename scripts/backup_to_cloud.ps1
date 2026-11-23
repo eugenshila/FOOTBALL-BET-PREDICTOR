@@ -4,7 +4,10 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $projectRoot ".env"
 $uploadDir = Join-Path $projectRoot "uploads"
-$profileFile = Join-Path $projectRoot "data\shop_profile.json"
+$dataDir = Join-Path $projectRoot "data"
+# Shop data that must survive a restore: login accounts (separate from the
+# inventory database), shop profile and the reference catalogue.
+$dataFiles = @("local-auth.db", "shop_profile.json", "catalog.json")
 $logDir = Join-Path $projectRoot "exports"
 $logFile = Join-Path $logDir "cloud-backup.log"
 
@@ -81,7 +84,10 @@ try {
 
     $archiveItems = @()
     if (Test-Path -LiteralPath $uploadDir) { $archiveItems += $uploadDir }
-    if (Test-Path -LiteralPath $profileFile) { $archiveItems += $profileFile }
+    foreach ($dataFile in $dataFiles) {
+        $candidate = Join-Path $dataDir $dataFile
+        if (Test-Path -LiteralPath $candidate) { $archiveItems += $candidate }
+    }
     if ($archiveItems.Count -gt 0) {
         Compress-Archive -Path $archiveItems -DestinationPath $mediaArchive -CompressionLevel Optimal
     } else {

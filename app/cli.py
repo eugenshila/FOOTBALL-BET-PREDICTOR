@@ -12,6 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import backup as backup_mod
 from . import cards, db, importers, storage, vision
 from .catalog import match_part, seed_if_empty
 from .config import EXPORT_DIR, settings
@@ -150,6 +151,47 @@ def cmd_export(args: argparse.Namespace) -> int:
     target = Path(args.out)
     target.write_text(importers.export_csv(), encoding="utf-8")
     print(f"· wrote {target}")
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """Back up database + part photos (+ logins/profile) locally and to the cloud."""
+    try:
+        manifest = backup_mod.build_local_backup(
+            Path(args.local_dir) if args.local_dir else None
+        )
+        print(backup_mod.summarize(manifest))
+        if not args.local_only:
+            prefix = backup_mod.upload_backup(manifest, keep=args.keep)
+            print(f"· cloud: uploaded to {prefix}")
+        else:
+            print("· cloud: skipped (--local-only)")
+    except backup_mod.BackupError as exc:
+        print(f"Backup failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    """Restore from a local backup folder or the newest cloud backup."""
+    try:
+        if args.local_dir:
+            backup_dir = Path(args.local_dir)
+        else:
+            stamps = backup_mod.list_cloud_backups()
+            if not stamps:
+                print("No cloud backups found. Run a backup first.", file=sys.stderr)
+                return 1
+            stamp = args.timestamp or stamps[-1]
+            print(f"· downloading cloud backup {stamp} …")
+            backup_dir = backup_mod.download_cloud_backup(stamp)
+        manifest = backup_mod.restore_backup(backup_dir, force=args.force)
+        print(f"· restored from {backup_dir}")
+        print(f"· safety copy of previous state: {manifest.get('safety_copy', '')}")
+        print("· start the app again to use the restored data")
+    except backup_mod.BackupError as exc:
+        print(f"Restore failed: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -420,6 +462,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     providers.add_argument("--image", default="", help="sample photo to identify")
     providers.set_defaults(func=cmd_check_providers)
+
+    backup_cmd = sub.add_parser(
+        "backup", help="back up database + part photos (+ logins/profile) locally and to the cloud"
+    )
+    backup_cmd.add_argument("--local-dir", default="", help="local backup folder (default: ./backups)")
+    backup_cmd.add_argument("--local-only", action="store_true", help="skip the cloud upload")
+    backup_cmd.add_argument("--keep", type=int, default=None, help="cloud backups to keep")
+    backup_cmd.set_defaults(func=cmd_backup)
+
+    restore_cmd = sub.add_parser(
+        "restore", help="restore from a local backup folder or the newest cloud backup"
+    )
+    restore_cmd.add_argument("--local-dir", default="", help="local backup folder to restore from")
+    restore_cmd.add_argument("--timestamp", default="", help="cloud backup timestamp (default: newest)")
+    restore_cmd.add_argument("--force", action="store_true", help="overwrite existing data (safety copy is kept)")
+    restore_cmd.set_defaults(func=cmd_restore)
     return parser
 
 

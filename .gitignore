@@ -20,6 +20,8 @@ data/*-startup.log
 data/*-uvicorn-*.log
 uploads/
 exports/
+# Local backup folders (database dumps + part photos) — never commit shop data
+backups/
 
 # Environment / secrets
 .env
