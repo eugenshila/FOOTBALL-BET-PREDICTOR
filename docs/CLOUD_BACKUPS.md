@@ -1,5 +1,9 @@
 # VERIFIX cloud backups — database + part photos
 
+> **Want the click-by-click version?** See
+> [BACKUP_SETUP_GUIDE.md](BACKUP_SETUP_GUIDE.md) — written for someone who has
+> never used a terminal. This file is the reference/technical version.
+
 Your stock list and every photo attached to a part live **outside Git**
 (`data/`, `uploads/` are git-ignored), so a lost laptop used to mean lost
 inventory *and* lost photos. This guide sets up automatic backups that
@@ -142,6 +146,9 @@ Cloud (Google Drive): gdrive:VerifixBackups/verifix-backup-20261123-230000
 
 To test without any cloud: `python -m app.cli backup --local-only`.
 To see all backups you could restore from: `python -m app.cli backups`.
+To prove the newest backup is complete **without changing anything**:
+`python -m app.cli verify`. On Windows, `backup-now.bat` in the project
+folder does a backup on double-click.
 Windows PowerShell alternative (PostgreSQL + AWS CLI):
 `.\scripts\backup_to_cloud.ps1`.
 
@@ -164,9 +171,12 @@ Windows PowerShell alternative (PostgreSQL + AWS CLI):
 ```powershell
 .\scripts\register_cloud_backup_task.ps1 -At "23:00"
 ```
-This registers a daily 11:00 PM East Africa Time job. It runs while you
-are signed in; if the computer is asleep it runs when available. It
-cannot back up while the laptop is powered off or offline.
+This registers a daily 11:00 PM East Africa Time job running
+`scripts/backup_to_cloud.py` (SQLite **or** PostgreSQL, Drive **or**
+bucket), appending its output to `exports/cloud-backup.log`. Pass
+`-Runner PowerShell` only for the legacy pg_dump + AWS CLI path. The job
+runs while you are signed in; if the computer is asleep it runs when
+available. It cannot back up while the laptop is powered off or offline.
 
 **Linux / macOS (cron):** add this line with `crontab -e` (adjust the
 path and time):
@@ -184,6 +194,7 @@ after the task is created.
 
 ```bash
 python -m app.cli backups                          # what can I restore from?
+python -m app.cli verify                           # check newest backup is intact
 python -m app.cli restore --force                  # newest cloud backup
 python -m app.cli restore --from gdrive --force    # newest Google Drive backup
 python -m app.cli restore --timestamp 20261123-230000 --force

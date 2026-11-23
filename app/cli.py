@@ -169,6 +169,21 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return 1 if manifest.get("errors") else 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Prove a backup is complete and undamaged without restoring it."""
+    try:
+        result = backup_mod.verify_backup(
+            source=args.source,
+            local_dir=Path(args.local_dir) if args.local_dir else None,
+            timestamp=args.timestamp,
+        )
+    except backup_mod.BackupError as exc:
+        print(f"Backup check failed: {exc}", file=sys.stderr)
+        return 1
+    print(backup_mod.summarize_verification(result))
+    return 0
+
+
 def cmd_backups(args: argparse.Namespace) -> int:
     """List cloud backups so you can see what is protected and pick one."""
     try:
@@ -491,6 +506,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     restore_cmd.add_argument("--force", action="store_true", help="overwrite existing data (safety copy is kept)")
     restore_cmd.set_defaults(func=cmd_restore)
+
+    verify_cmd = sub.add_parser(
+        "verify", help="download a backup and check it is complete (changes nothing)"
+    )
+    verify_cmd.add_argument(
+        "--from", dest="source", choices=["auto", "s3", "gdrive"], default="auto",
+        help="cloud to check (default: whatever is configured in .env)",
+    )
+    verify_cmd.add_argument("--timestamp", default="", help="backup timestamp (default: newest)")
+    verify_cmd.add_argument("--local-dir", default="", help="check a local backup folder instead")
+    verify_cmd.set_defaults(func=cmd_verify)
 
     backups_cmd = sub.add_parser("backups", help="list the cloud backups available to restore")
     backups_cmd.add_argument(

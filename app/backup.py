@@ -869,6 +869,75 @@ def list_available_backups(source: str = "auto") -> list[dict]:
     return entries
 
 
+def verify_backup(
+    *,
+    source: str = "auto",
+    local_dir: Path | None = None,
+    timestamp: str = "",
+) -> dict:
+    """Download a backup and check it — without changing anything on this PC.
+
+    Every file is re-hashed against the manifest, so this answers the only
+    question that matters: "if my laptop died tonight, is this backup good?"
+    """
+    if local_dir is not None:
+        backup_dir, origin, stamp = Path(local_dir), "local", local_dir.name
+    else:
+        entries = list_available_backups(source)
+        if not entries:
+            raise BackupError(
+                "No cloud backups found. Run a backup first, or check .env."
+            )
+        if timestamp:
+            matches = [e for e in entries if e["timestamp"] == timestamp]
+            if not matches:
+                raise BackupError(f"No cloud backup with timestamp {timestamp}.")
+            entry = matches[0]
+        else:
+            entry = entries[-1]
+        origin, stamp = entry["source"], entry["timestamp"]
+        if origin == "s3":
+            backup_dir = download_cloud_backup(stamp)
+        else:
+            backup_dir = download_rclone_backup(stamp)
+
+    manifest = _verify_manifest(backup_dir)
+    return {
+        "source": origin,
+        "timestamp": stamp,
+        "backup_dir": str(backup_dir),
+        "created_at": manifest.get("created_at", ""),
+        "engine": manifest.get("engine", ""),
+        "upload_file_count": manifest.get("upload_file_count", 0),
+        "photo_check": manifest.get("photo_check", {}),
+        "files": manifest.get("files", []),
+    }
+
+
+def summarize_verification(result: dict) -> str:
+    """Plain-language 'is my backup good?' report."""
+    check = result.get("photo_check", {})
+    lines = [
+        f"Checked {result.get('source')} backup {result.get('timestamp')}",
+        f"OK: all {len(result.get('files', []))} files are present and undamaged "
+        "(checksums match)",
+        f"Taken: {result.get('created_at', 'unknown')}",
+        f"Inventory engine: {result.get('engine', '?')} · "
+        f"photo files in backup: {result.get('upload_file_count', 0)}",
+    ]
+    if check.get("checked"):
+        lines.append(
+            f"Photos: {check.get('photos_found', 0)}/{check.get('parts_with_photo', 0)} "
+            "part photos were in uploads/ at backup time"
+        )
+        for item in check.get("missing", [])[:10]:
+            lines.append(f"  ! was already missing — {item}")
+        if check.get("missing"):
+            lines.append("  (these parts had no photo file even before the backup)")
+    lines.append("Nothing on this computer was changed.")
+    return "\n".join(lines)
+
+
 def restore_from_any(
     *,
     source: str = "auto",

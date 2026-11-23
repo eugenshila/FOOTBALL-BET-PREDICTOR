@@ -93,9 +93,12 @@ notes. Never use reference/placeholder images as evidence of a used part's actua
 condition. Blank prices currently import as zero and must be set before quoting.
 
 **Data note:** inventory and uploaded media are git-ignored shop data, not part
-of this repository. Export a CSV and keep an external backup of your database and
-photos before changing environments. An empty checkout starts with the four-part
-demo catalogue, not your real stock list. PostgreSQL data in `/tmp` is not durable.
+of this repository. Keep an external backup of your database and photos before
+changing environments — `python -m app.cli backup` packages both (see
+[docs/CLOUD_BACKUPS.md](docs/CLOUD_BACKUPS.md), or the plain-English
+[docs/BACKUP_SETUP_GUIDE.md](docs/BACKUP_SETUP_GUIDE.md)). Also export a CSV with
+`python -m app.cli export-csv`. An empty checkout starts with the four-part demo
+catalogue, not your real stock list. PostgreSQL data in `/tmp` is not durable.
 
 The sample cards above are legacy red-theme examples; newly generated cards use
 Verifix's warm-yellow theme.

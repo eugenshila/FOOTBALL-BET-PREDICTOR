@@ -423,3 +423,56 @@ def test_bundled_demo_photos_are_not_reported_missing(tmp_path):
     assert "bundled with the app" in backup_mod.summarize({
         "engine": "sqlite", "upload_file_count": 0, "photo_check": report,
     })
+
+
+# ── verify: prove a backup is good without restoring it ────────────────────
+
+def test_verify_local_backup_reports_health(tmp_path):
+    db_path, upload_dir, data_dir = _make_shop(tmp_path)
+    manifest = backup_mod.build_local_backup(
+        tmp_path / "backups", upload_dir=upload_dir, data_dir=data_dir,
+        db_path=db_path, database_url="", timestamp="20261123-230000",
+    )
+    result = backup_mod.verify_backup(local_dir=Path(manifest["backup_dir"]))
+    assert result["engine"] == "sqlite"
+    assert len(result["files"]) == 3
+    assert result["photo_check"]["photos_found"] == 2
+    text = backup_mod.summarize_verification(result)
+    assert "present and undamaged" in text
+    assert "Nothing on this computer was changed" in text
+
+
+def test_verify_refuses_a_damaged_backup(tmp_path):
+    db_path, upload_dir, data_dir = _make_shop(tmp_path)
+    manifest = backup_mod.build_local_backup(
+        tmp_path / "backups", upload_dir=upload_dir, data_dir=data_dir,
+        db_path=db_path, database_url="", timestamp="20261123-230000",
+    )
+    (Path(manifest["backup_dir"]) / "inventory.db").write_bytes(b"corrupted")
+    with pytest.raises(backup_mod.BackupError, match="checksum"):
+        backup_mod.verify_backup(local_dir=Path(manifest["backup_dir"]))
+
+
+def test_verify_newest_drive_backup(tmp_path, fake_rclone, monkeypatch):
+    db_path, upload_dir, data_dir = _make_shop(tmp_path)
+    manifest = backup_mod.build_local_backup(
+        tmp_path / "backups", upload_dir=upload_dir, data_dir=data_dir,
+        db_path=db_path, database_url="", timestamp="20261123-230000",
+    )
+    backup_mod.upload_to_rclone(manifest, keep=0)
+    monkeypatch.setattr(
+        backup_mod, "download_rclone_backup",
+        lambda stamp, **kw: tmp_path / "drive" / "VerifixBackups"
+        / f"verifix-backup-{stamp}",
+    )
+    result = backup_mod.verify_backup(source="gdrive")
+    assert result["source"] == "gdrive"
+    assert result["timestamp"] == "20261123-230000"
+    assert result["photo_check"]["photos_found"] == 2
+
+
+def test_verify_with_nothing_configured_is_clear(monkeypatch):
+    monkeypatch.delenv("CLOUD_BACKUP_BUCKET", raising=False)
+    monkeypatch.delenv("CLOUD_BACKUP_RCLONE_REMOTE", raising=False)
+    with pytest.raises(backup_mod.BackupError, match="No cloud backups found"):
+        backup_mod.verify_backup()
