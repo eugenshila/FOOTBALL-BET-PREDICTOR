@@ -2,8 +2,9 @@
 """Restore Verifix from a cloud or local backup. Stop the app first!
 
 Usage:
-    python scripts/restore_from_cloud.py --list            # show cloud backups
-    python scripts/restore_from_cloud.py                   # restore newest cloud backup
+    python scripts/restore_from_cloud.py --list            # show available backups
+    python scripts/restore_from_cloud.py                   # restore the newest backup
+    python scripts/restore_from_cloud.py --from gdrive     # newest Google Drive backup
     python scripts/restore_from_cloud.py --timestamp 20261123-230000
     python scripts/restore_from_cloud.py --local-dir ./backups/verifix-backup-20261123-230000
     python scripts/restore_from_cloud.py --force           # overwrite existing data
@@ -25,34 +26,32 @@ from app import backup as backup_mod  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Restore Verifix from a backup")
-    parser.add_argument("--list", action="store_true", help="list cloud backups and exit")
-    parser.add_argument("--timestamp", default="", help="cloud backup timestamp (default: newest)")
+    parser.add_argument("--list", action="store_true", help="list available backups and exit")
+    parser.add_argument("--timestamp", default="", help="backup timestamp (default: newest)")
+    parser.add_argument(
+        "--from", dest="source", choices=["auto", "s3", "gdrive"], default="auto",
+        help="cloud to restore from (default: whatever is configured in .env)",
+    )
     parser.add_argument("--local-dir", default="", help="restore from a local backup folder instead of the cloud")
     parser.add_argument("--force", action="store_true", help="overwrite existing data (safety copy is kept)")
     args = parser.parse_args(argv)
 
     try:
         if args.list:
-            stamps = backup_mod.list_cloud_backups()
-            if not stamps:
+            entries = backup_mod.list_available_backups(args.source)
+            if not entries:
                 print("No cloud backups found.")
-            for stamp in stamps:
-                print(stamp)
+            for entry in entries:
+                print(f"{entry['timestamp']}  {entry['source']}")
             return 0
 
-        if args.local_dir:
-            backup_dir = Path(args.local_dir)
-        else:
-            stamps = backup_mod.list_cloud_backups()
-            if not stamps:
-                print("No cloud backups found. Run a backup first.", file=sys.stderr)
-                return 1
-            stamp = args.timestamp or stamps[-1]
-            print(f"Downloading cloud backup {stamp} …")
-            backup_dir = backup_mod.download_cloud_backup(stamp)
-
-        manifest = backup_mod.restore_backup(backup_dir, force=args.force)
-        print(f"Restored from {backup_dir}")
+        manifest = backup_mod.restore_from_any(
+            source=args.source,
+            local_dir=Path(args.local_dir) if args.local_dir else None,
+            timestamp=args.timestamp,
+            force=args.force,
+        )
+        print(f"Restored from {manifest['source_dir']} ({manifest['restored_from']})")
         print(f"Safety copy of previous state: {manifest.get('safety_copy', '')}")
         print("Start the app again to use the restored data.")
     except backup_mod.BackupError as exc:

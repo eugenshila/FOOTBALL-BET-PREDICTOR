@@ -108,8 +108,14 @@ def sha256_of(path: Path) -> str:
 
 # ── photo link verification ─────────────────────────────────────────────────
 
-def _resolve_photo(raw: str, upload_dir: Path) -> Path | None:
-    """Mirror ``app.image_review.local_image``: where a stored path points."""
+def _resolve_photo(raw: str, upload_dir: Path) -> tuple[Path, str] | None:
+    """Where a stored ``image_path`` points, and which kind of photo it is.
+
+    Returns ``(path, "uploads")`` for shop photos (these must be in the
+    backup) or ``(path, "seed")`` for the demo photos bundled inside the app
+    (those ship with the code, so they cannot be lost). ``None`` when the
+    path points somewhere else entirely.
+    """
     if not raw:
         return None
     value = raw.replace("\\", "/")
@@ -123,11 +129,11 @@ def _resolve_photo(raw: str, upload_dir: Path) -> Path | None:
             candidate = config.BASE_DIR / candidate
     try:
         resolved = candidate.resolve()
-        root = upload_dir.resolve()
     except OSError:
         return None
-    if resolved.is_relative_to(root):
-        return resolved
+    for root, kind in ((upload_dir.resolve(), "uploads"), (Path(config.SEED_DIR).resolve(), "seed")):
+        if resolved.is_relative_to(root):
+            return resolved, kind
     return None
 
 
@@ -204,15 +210,21 @@ def photo_link_report(
     referenced: set[Path] = set()
     missing: list[str] = []
     found = 0
+    report["bundled"] = 0
     for part_id, raw in rows:
         if not raw:
             continue
-        report["parts_with_photo"] += 1
-        resolved = _resolve_photo(raw, upload_dir)
-        if resolved is not None and resolved.is_file():
+        located = _resolve_photo(raw, upload_dir)
+        if located is not None and located[0].is_file():
+            if located[1] == "seed":
+                # Demo photo that ships with the app — nothing to back up.
+                report["bundled"] += 1
+                continue
+            report["parts_with_photo"] += 1
             found += 1
-            referenced.add(resolved)
+            referenced.add(located[0])
         else:
+            report["parts_with_photo"] += 1
             missing.append(f"part {part_id}: {raw}")
     report["photos_found"] = found
     report["missing"] = missing
@@ -384,16 +396,25 @@ def summarize(manifest: dict) -> str:
         f"upload files: {manifest.get('upload_file_count', 0)}",
     ]
     if check.get("checked"):
-        lines.append(
+        line = (
             f"Photos: {check.get('photos_found', 0)}/{check.get('parts_with_photo', 0)} "
             "part photos present in uploads/"
         )
+        if check.get("bundled"):
+            line += f" (+{check['bundled']} demo photos bundled with the app)"
+        lines.append(line)
         for item in check.get("missing", [])[:10]:
             lines.append(f"  ! missing photo — {item}")
         if check.get("missing"):
             lines.append("  (fix these in Inventory → Edit → photo, then back up again)")
     else:
         lines.append(f"Photos: could not verify ({check.get('reason', 'unknown')})")
+    for upload in manifest.get("uploads", []):
+        lines.append(f"Cloud ({upload.get('destination')}): {upload.get('target')}")
+    for note in manifest.get("notes", []):
+        lines.append(note)
+    for error in manifest.get("errors", []):
+        lines.append(f"! {error}")
     return "\n".join(lines)
 
 
@@ -654,3 +675,231 @@ def download_cloud_backup(
             target = dest_root / Path(key).name
             client.download_file(settings["bucket"], key, str(target))
     return dest_root
+
+
+# ── Google Drive (via rclone) ───────────────────────────────────────────────
+# Google Drive has no S3 API, so it cannot use the boto3 path above. rclone
+# speaks Google Drive natively (handles OAuth, retries and resumable uploads),
+# so the backup folder is simply copied to a Drive folder. rclone also covers
+# OneDrive, Dropbox, MEGA and local USB drives with the same settings.
+
+def rclone_settings() -> dict[str, str]:
+    """rclone remote from the environment, e.g. ``gdrive:VerifixBackups``."""
+    return {
+        "remote": os.getenv("CLOUD_BACKUP_RCLONE_REMOTE", "").strip().rstrip("/"),
+        "keep": os.getenv("CLOUD_BACKUP_KEEP", "30").strip(),
+    }
+
+
+def _rclone_binary() -> str:
+    found = shutil.which("rclone")
+    if found:
+        return found
+    override = os.getenv("RCLONE_PATH", "").strip()
+    if override and Path(override).exists():
+        return override
+    raise BackupError(
+        "rclone was not found. Install it from https://rclone.org/downloads/ "
+        "and add it to PATH, or set RCLONE_PATH in .env to rclone.exe."
+    )
+
+
+def _run_rclone(args: list[str], *, timeout: int = 3600) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        [_rclone_binary(), *args, "--log-level", "ERROR"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[:500]
+        raise BackupError(f"rclone failed ({' '.join(args[:2])}): {detail}")
+    return result
+
+
+def _rclone_dir(settings: dict[str, str], stamp: str) -> str:
+    return f"{settings['remote']}/{BACKUP_DIR_NAME}-{stamp}"
+
+
+def upload_to_rclone(
+    manifest: dict,
+    *,
+    settings: dict[str, str] | None = None,
+    keep: int | None = None,
+) -> str:
+    """Copy one local backup folder to the rclone remote (e.g. Google Drive)."""
+    settings = rclone_settings() if settings is None else settings
+    if not settings["remote"]:
+        raise BackupError(
+            "Set CLOUD_BACKUP_RCLONE_REMOTE in .env first (e.g. gdrive:VerifixBackups)."
+        )
+    backup_dir = Path(manifest["backup_dir"])
+    stamp = backup_dir.name.removeprefix(f"{BACKUP_DIR_NAME}-")
+    target = _rclone_dir(settings, stamp)
+    _run_rclone(["copy", str(backup_dir), target])
+    if keep is None:
+        try:
+            keep = int(settings.get("keep") or 30)
+        except ValueError:
+            keep = 30
+    if keep > 0:
+        prune_rclone_backups(settings, keep=keep)
+    return target
+
+
+def list_rclone_backups(*, settings: dict[str, str] | None = None) -> list[str]:
+    """Sorted backup timestamps on the rclone remote (oldest first)."""
+    settings = rclone_settings() if settings is None else settings
+    if not settings["remote"]:
+        raise BackupError("Set CLOUD_BACKUP_RCLONE_REMOTE in .env first.")
+    try:
+        result = _run_rclone(["lsf", "--dirs-only", settings["remote"]])
+    except BackupError:
+        return []  # the backup folder does not exist yet
+    stamps = set()
+    for line in result.stdout.splitlines():
+        name = line.strip().rstrip("/")
+        if name.startswith(f"{BACKUP_DIR_NAME}-"):
+            stamps.add(name.removeprefix(f"{BACKUP_DIR_NAME}-"))
+    return sorted(stamps)
+
+
+def prune_rclone_backups(settings: dict[str, str], *, keep: int) -> int:
+    """Delete all but the newest ``keep`` backups on the remote.
+
+    ``--drive-use-trash=false`` is passed so old backups really free up space
+    instead of sitting in the Drive bin for 30 days.
+    """
+    stamps = list_rclone_backups(settings=settings)
+    excess = stamps[: max(0, len(stamps) - keep)]
+    for stamp in excess:
+        _run_rclone(
+            ["purge", _rclone_dir(settings, stamp), "--drive-use-trash=false"]
+        )
+    return len(excess)
+
+
+def download_rclone_backup(
+    stamp: str,
+    *,
+    settings: dict[str, str] | None = None,
+    dest_root: Path | None = None,
+) -> Path:
+    """Copy one backup from the rclone remote into a local folder."""
+    settings = rclone_settings() if settings is None else settings
+    if not settings["remote"]:
+        raise BackupError("Set CLOUD_BACKUP_RCLONE_REMOTE in .env first.")
+    dest_root = (
+        Path(dest_root)
+        if dest_root is not None
+        else Path(tempfile.mkdtemp(prefix="verifix-restore-")) / f"{BACKUP_DIR_NAME}-{stamp}"
+    )
+    dest_root.mkdir(parents=True, exist_ok=True)
+    _run_rclone(["copy", _rclone_dir(settings, stamp), str(dest_root)])
+    return dest_root
+
+
+# ── one-command orchestration (used by the CLI and scripts) ─────────────────
+
+def run_backup(
+    dest_root: Path | None = None,
+    *,
+    local_only: bool = False,
+    keep: int | None = None,
+) -> dict:
+    """Local backup, then every configured cloud destination.
+
+    A failing cloud destination never discards the local backup; the reason
+    is returned in ``errors`` so the run still reports failure loudly.
+    """
+    manifest = build_local_backup(dest_root)
+    manifest["uploads"] = []
+    manifest["errors"] = []
+    manifest["notes"] = []
+
+    if local_only:
+        manifest["notes"].append("Cloud: skipped (--local-only)")
+        return manifest
+
+    s3 = cloud_settings()
+    drive = rclone_settings()
+    configured = False
+
+    if s3["bucket"]:
+        configured = True
+        try:
+            target = upload_backup(manifest, settings=s3, keep=keep)
+            manifest["uploads"].append({"destination": "S3", "target": target})
+        except BackupError as exc:
+            manifest["errors"].append(f"S3 upload failed: {exc}")
+
+    if drive["remote"]:
+        configured = True
+        try:
+            target = upload_to_rclone(manifest, settings=drive, keep=keep)
+            manifest["uploads"].append({"destination": "Google Drive", "target": target})
+        except BackupError as exc:
+            manifest["errors"].append(f"Google Drive upload failed: {exc}")
+
+    if not configured:
+        manifest["notes"].append(
+            "Cloud: no destination configured yet — this backup is on this "
+            "computer only. See docs/CLOUD_BACKUPS.md"
+        )
+    return manifest
+
+
+def list_available_backups(source: str = "auto") -> list[dict]:
+    """Backups available to restore, as ``{source, timestamp}`` entries."""
+    entries: list[dict] = []
+    if source in ("auto", "s3"):
+        s3 = cloud_settings()
+        if s3["bucket"]:
+            for stamp in list_cloud_backups(settings=s3):
+                entries.append({"source": "s3", "timestamp": stamp})
+        elif source == "s3":
+            raise BackupError("CLOUD_BACKUP_BUCKET is not set in .env.")
+    if source in ("auto", "gdrive"):
+        drive = rclone_settings()
+        if drive["remote"]:
+            for stamp in list_rclone_backups(settings=drive):
+                entries.append({"source": "gdrive", "timestamp": stamp})
+        elif source == "gdrive":
+            raise BackupError("CLOUD_BACKUP_RCLONE_REMOTE is not set in .env.")
+    return entries
+
+
+def restore_from_any(
+    *,
+    source: str = "auto",
+    local_dir: Path | None = None,
+    timestamp: str = "",
+    force: bool = False,
+) -> dict:
+    """Restore from a local folder or the newest backup in the cloud."""
+    if local_dir is not None:
+        backup_dir, origin = Path(local_dir), "local"
+    else:
+        entries = list_available_backups(source)
+        if not entries:
+            raise BackupError(
+                "No cloud backups found. Check .env, or pass --local-dir to "
+                "restore from a folder on this computer."
+            )
+        if timestamp:
+            matches = [e for e in entries if e["timestamp"] == timestamp]
+            if not matches:
+                raise BackupError(f"No cloud backup with timestamp {timestamp}.")
+            entry = matches[0]
+        else:
+            entry = entries[-1]
+        origin = entry["source"]
+        if origin == "s3":
+            backup_dir = download_cloud_backup(entry["timestamp"])
+        else:
+            backup_dir = download_rclone_backup(entry["timestamp"])
+
+    manifest = restore_backup(backup_dir, force=force)
+    manifest["restored_from"] = origin
+    manifest["source_dir"] = str(backup_dir)
+    return manifest
