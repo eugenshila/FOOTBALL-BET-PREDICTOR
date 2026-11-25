@@ -6,6 +6,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
@@ -81,6 +83,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress HTML/CSS/JS/JSON on the wire — noticeably faster over Tailscale or
+# mobile data. Media (already compressed formats) is largely unaffected.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # Local authentication: no Supabase calls, no public self-registration.
@@ -307,6 +312,24 @@ def lookup(number: str) -> InventoryPart:
 
 
 # --- identification --------------------------------------------------------
+THUMB_EDGE = 256
+THUMB_QUALITY = 75
+_THUMB_RE = re.compile(r"\d{8}-[0-9a-f]{10}\.jpg")
+
+def _thumb_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.thumb.jpg")
+
+def _write_thumbnail(source: Path, thumb: Path) -> None:
+    with Image.open(source) as image:
+        image = image.convert("RGB")
+        image.thumbnail((THUMB_EDGE, THUMB_EDGE), Image.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, "JPEG", quality=THUMB_QUALITY, optimize=True)
+    tmp = thumb.with_name(f".{thumb.name}.{uuid.uuid4().hex[:6]}.tmp")
+    tmp.write_bytes(buffer.getvalue())
+    os.replace(tmp, thumb)
+
+
 def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
     try:
         with Image.open(io.BytesIO(raw)) as probe:
@@ -326,7 +349,36 @@ def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
     tmp = path.with_name(f".{name}.{uuid.uuid4().hex[:6]}.tmp")
     tmp.write_bytes(normalised)
     os.replace(tmp, path)
+    try:
+        _write_thumbnail(path, _thumb_path(path))
+    except OSError as exc:  # thumbnails are an optimisation; never fail the upload
+        log.warning("Thumbnail generation failed for %s: %s", name, exc)
     return path, normalised
+
+
+@app.get("/api/thumbs/{filename}", include_in_schema=False)
+def part_thumbnail(filename: str) -> FileResponse:
+    """Small cached thumbnail for the parts table.
+
+    Inventory photos are 1600px JPEGs; the table only shows 46px thumbnails,
+    so serving the full file wastes bandwidth on phones. Thumbnails are
+    derived from the immutable upload (same content forever) and cached
+    aggressively by the browser.
+    """
+    if not _THUMB_RE.fullmatch(filename):
+        raise HTTPException(status_code=404, detail="thumbnail not found")
+    original = UPLOAD_DIR / filename
+    thumb = _thumb_path(original)
+    if not thumb.is_file():
+        if not original.is_file():
+            raise HTTPException(status_code=404, detail="thumbnail not found")
+        try:
+            _write_thumbnail(original, thumb)
+        except (UnidentifiedImageError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="thumbnail not found") from exc
+    response = FileResponse(thumb, media_type="image/jpeg")
+    response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    return response
 
 
 @app.post("/api/identify", response_model=IdentifyResponse)
