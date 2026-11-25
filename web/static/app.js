@@ -35,6 +35,44 @@ const escapeHtml = (value) =>
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[ch]));
 
+/* Phone cameras produce 4–12 MB photos; uploading those over a home
+   Tailscale link is what made saving feel slow. Downscale once in the
+   browser to the same 1600px edge the server stores, as JPEG — usually
+   200–500 KB. Anything we cannot decode (e.g. some HEIC files) falls
+   back to the original and the server normalises it as before. */
+const UPLOAD_MAX_EDGE = 1600;
+const UPLOAD_JPEG_QUALITY = 0.82;
+const UPLOAD_SKIP_BELOW_BYTES = 900 * 1024; // already small enough to send as-is
+
+async function prepareImageForUpload(file) {
+  if (!file || !/^image\//i.test(file.type || "")) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const longest = Math.max(bitmap.width, bitmap.height);
+      const scale = Math.min(1, UPLOAD_MAX_EDGE / longest);
+      if (scale >= 1 && file.size <= UPLOAD_SKIP_BELOW_BYTES) return file;
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return file;
+      ctx.drawImage(bitmap, 0, 0, width, height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", UPLOAD_JPEG_QUALITY));
+      if (!blob) return file;
+      if (blob.size >= file.size) return file; // re-encode gained us nothing
+      const base = (file.name || "part-photo").replace(/\.[^.]+$/, "");
+      return new File([blob], `${base}.jpg`, { type: "image/jpeg", lastModified: Date.now() });
+    } finally {
+      bitmap.close?.();
+    }
+  } catch {
+    return file; // undecodable here — send the original, server still normalises
+  }
+}
+
 const SOCIAL_PLATFORMS = [
   ["facebook", "Facebook"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["x", "X"],
 ];
@@ -322,8 +360,10 @@ async function identify() {
     : "Analysing the photo…";
   $("#btn-identify").disabled = true;
 
+  const upload = await prepareImageForUpload(state.selectedFile);
+  if (token !== identifyToken) return; // a newer upload superseded this one while compressing
   const form = new FormData();
-  form.append("file", state.selectedFile);
+  form.append("file", upload, upload.name || "photo.jpg");
 
   try {
     const result = await api("/api/identify", { method: "POST", body: form });
@@ -478,6 +518,15 @@ function mediaUrl(path) {
   return "";
 }
 
+/* The parts table shows 46px thumbnails — point it at the small server-side
+   thumbnail (a few KB) instead of the 1600px upload. The full image stays
+   one tap away via the thumbnail link. */
+function thumbUrl(path) {
+  const url = mediaUrl(path);
+  const match = url.match(/^\/media\/uploads\/(\d{8}-[0-9a-f]{10}\.jpg)$/i);
+  return match ? `/api/thumbs/${match[1]}` : url;
+}
+
 function prefillFromReport(report) {
   const fit = (report.fitment && report.fitment[0]) || {};
   return {
@@ -499,11 +548,15 @@ function prefillFromReport(report) {
 /* ── inventory table ──────────────────────────────────────── */
 async function loadParts(query = "") {
   try {
-    state.parts = await api(`/api/parts?q=${encodeURIComponent(query)}`);
+    // Fetch the list and the stats together — one round trip less on a phone.
+    const [parts, stats] = await Promise.all([
+      api(`/api/parts?q=${encodeURIComponent(query)}`),
+      api("/api/stats").catch(() => null),
+    ]);
+    state.parts = parts;
     renderParts();
     populateStudioSelect();
-    const stats = await api("/api/stats");
-    renderStats(stats);
+    if (stats) renderStats(stats);
   } catch (error) {
     toast(error.message, true);
   }
@@ -556,7 +609,7 @@ function renderParts() {
     const verified = part.verified ? "" : '<span class="tag unverified">unverified</span>';
     const photoAction = part.image_path ? "Replace" : "Add";
     const photo = photoUrl
-      ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View full-size photo"><img class="part-thumb" src="${escapeHtml(photoUrl)}" alt="Photo of ${name}" loading="lazy" /></a>`
+      ? `<a class="part-photo-link" href="${escapeHtml(photoUrl)}" target="_blank" rel="noopener" title="View full-size photo"><img class="part-thumb" src="${escapeHtml(thumbUrl(part.image_path))}" alt="Photo of ${name}" loading="lazy" decoding="async" /></a>`
       : '<span class="part-placeholder" aria-hidden="true">◇</span>';
     const sub = `${escapeHtml(part.category || "")}${part.fitment[0] ? " · " + escapeHtml([part.fitment[0].make, part.fitment[0].model].filter(Boolean).join(" ")) : ""}`;
     return `<tr data-id="${part.id}">
@@ -597,8 +650,15 @@ function renderParts() {
     event.stopPropagation();
     const file = input.files?.[0];
     if (!file) return;
+    input.value = ""; // allow re-picking the same photo; compress before upload
+    let upload;
+    try {
+      upload = await prepareImageForUpload(file);
+    } catch {
+      upload = file;
+    }
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", upload, upload.name || "part-photo.jpg");
     try {
       await api(`/api/parts/${input.dataset.photo}/image`, { method: "POST", body: formData });
       toast("Photo saved to part");
@@ -819,7 +879,7 @@ function renderDrawerPhoto(path, localFile = null) {
     preview.innerHTML = `<span class="muted small">Selected photo: ${escapeHtml(localFile.name)}</span><br><img class="drawer-photo-preview" src="${URL.createObjectURL(localFile)}" alt="Selected part photo preview" />`;
     preview.hidden = false;
   } else if (path) {
-    preview.innerHTML = `<span class="muted small">Current photo</span><br><img class="drawer-photo-preview" src="${escapeHtml(mediaUrl(path))}" alt="Current part photo" />`;
+    preview.innerHTML = `<span class="muted small">Current photo</span><br><img class="drawer-photo-preview" src="${escapeHtml(thumbUrl(path))}" alt="Current part photo" />`;
     preview.hidden = false;
   } else {
     preview.innerHTML = "";
@@ -827,11 +887,17 @@ function renderDrawerPhoto(path, localFile = null) {
   }
 }
 
-$("#part-form").elements.part_image.addEventListener("change", (event) => {
-  const file = event.target.files?.[0];
+let draftPhotoPickToken = 0;
+$("#part-form").elements.part_image.addEventListener("change", async (event) => {
+  const token = ++draftPhotoPickToken;
+  const picked = event.target.files?.[0];
   const path = $("#part-form").elements.image_path.value;
   const oldKey = state.draft?.photoKey;
   if (oldKey && state.account) trackPhoto(photoOperation("delete", photoStorageKey(oldKey)).catch(() => toast("Could not remove previous local photo.", true)));
+  // Downscale now so the local draft, the preview and the eventual upload are
+  // all one small JPEG.
+  const file = picked ? await prepareImageForUpload(picked) : null;
+  if (token !== draftPhotoPickToken) return; // a newer pick took over
   state.draftPhoto = file || null;
   state.photoMissing = false;
   state.photoStorageFailed = false;
@@ -891,10 +957,11 @@ async function savePart(event) {
       saveDraft();
       $("#drawer-title").textContent = `Part #${saved.id}`;
     }
-    const photo = state.draftPhoto || form.elements.part_image.files?.[0];
+    const photo = state.draftPhoto || form.elements.part_image.files?.[0] || null;
     if (photo) {
+      const upload = await prepareImageForUpload(photo);
       const imageForm = new FormData();
-      imageForm.append("file", photo);
+      imageForm.append("file", upload, upload.name || "part-photo.jpg");
       saved = await api(`/api/parts/${saved.id}/image`, { method: "POST", body: imageForm });
     }
     clearDraft();

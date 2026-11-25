@@ -28,6 +28,27 @@ from . import config
 
 router = APIRouter()
 ACCESS_COOKIE = "trailvault_session"
+
+
+def _cache_control_for(path: str) -> str:
+    """Per-path caching policy.
+
+    Photo uploads get date+uuid filenames and their content never changes, so
+    the browser can keep them forever — that is what makes the parts table
+    fast on a phone over Tailscale. API and HTML responses stay no-store.
+    """
+    if path.startswith("/media/uploads/") or path.startswith("/api/thumbs/"):
+        return "private, max-age=31536000, immutable"
+    if path.startswith("/media/exports/"):
+        return "private, max-age=3600"
+    if path.startswith("/static/"):
+        return "public, max-age=3600"
+    if path.startswith("/assets/fonts/"):
+        return "public, max-age=604800, immutable"
+    if path.startswith("/assets/"):
+        return "private, max-age=86400"
+    return "no-store"
+
 REFRESH_COOKIE = "verifix_refresh_token"  # compatibility; no refresh token is used
 _ITERATIONS = 600_000
 _SCHEMA = """
@@ -258,7 +279,9 @@ async def guard(request: Request, call_next):
     path = request.url.path
     public = path in {"/login", "/api/health", "/api/auth/signin", "/api/auth/signout", "/api/auth/signup"} or path.startswith(("/static/", "/assets/fonts/"))
     if public or (request.method == "HEAD" and path == "/"):
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = _cache_control_for(path)
+        return response
     try:
         user = await run_in_threadpool(_user, request.cookies.get(ACCESS_COOKIE))
     except (sqlite3.Error, OSError, ValueError):
@@ -270,7 +293,7 @@ async def guard(request: Request, call_next):
         return response
     request.state.auth_user = user
     response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = _cache_control_for(path)
     return response
 
 
