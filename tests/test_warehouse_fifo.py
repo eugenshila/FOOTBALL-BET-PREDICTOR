@@ -174,33 +174,57 @@ def test_identify_checks_clear_local_photo_before_provider(client, sample_parts,
         client.delete(f"/api/parts/{part['id']}")
 
 
-def test_identify_falls_back_if_local_match_missing_or_ambiguous(client, sample_parts, monkeypatch):
+def test_identifier_stops_for_weak_and_ambiguous_local_candidates(client, sample_parts, monkeypatch):
     from app import photo_match, vision
-    from app.models import IdentificationReport
 
     first = make_part(client, part_name="Local PCV test", oem_part_number="LOCAL-PCV-TEST")
     second = make_part(client, part_name="Local wheel test", oem_part_number="LOCAL-HUB-TEST")
     try:
         part = db.get_part(first["id"])
         other = db.get_part(second["id"])
-        calls = []
-        def provider(image, mime):
-            calls.append(mime)
-            return IdentificationReport(part_name=part.part_name, oem_part_number=part.oem_part_number, provider="test-provider")
-        monkeypatch.setattr(vision, "identify", provider)
+        def forbidden_provider(*args, **kwargs):
+            raise AssertionError("A local candidate must prevent external identification")
+        monkeypatch.setattr(vision, "identify", forbidden_provider)
         payload = sample_parts["wheel-hub"].read_bytes()
-        for suggestions in [[],
-                            [{"part": part, "distance": 0.2, "reference_url": "/assets/seed/pcv-valve.jpg"}],
-                            [{"part": part, "distance": 0.01, "reference_url": "/assets/seed/pcv-valve.jpg"},
-                             {"part": other, "distance": 0.02, "reference_url": "/assets/seed/wheel-hub.jpg"}]]:
+        for suggestions in [
+            [{"part": part, "distance": 0.2, "reference_url": "/assets/seed/pcv-valve.jpg"}],
+            [{"part": part, "distance": 0.01, "reference_url": "/assets/seed/pcv-valve.jpg"},
+             {"part": other, "distance": 0.02, "reference_url": "/assets/seed/wheel-hub.jpg"}],
+        ]:
             monkeypatch.setattr(photo_match, "suggestions", lambda image, result=suggestions: result)
             response = client.post("/api/identify", files={"file": ("wheel.jpg", payload, "image/jpeg")})
             assert response.status_code == 200, response.text
             body = response.json()
-            assert body["report"]["provider"] == "test-provider"
+            assert body["report"]["provider"] == "local-inventory"
+            assert body["report"]["overall_confidence"] == "low"
+            assert body["report"]["needs_manual_review"] is True
+            assert "uncertain" in body["report"]["warnings"][-1]
             assert body["matched_part"]["id"] == part.id
-            assert "No clear local photo match" in body["report"]["warnings"][0]
-        assert len(calls) == 3
+            assert len(body["photo_candidates"]) == len(suggestions)
+        assert client.get(f"/api/parts/{part.id}").json()["quantity"] == first["quantity"]
     finally:
         client.delete(f"/api/parts/{first['id']}")
         client.delete(f"/api/parts/{second['id']}")
+
+
+def test_identifier_uses_provider_when_no_local_candidates(client, sample_parts, monkeypatch):
+    from app import photo_match, vision
+    from app.models import IdentificationReport
+
+    first = make_part(client, part_name="Fallback PCV", oem_part_number="FALLBACK-PCV-TEST")
+    try:
+        calls = []
+        def provider(image, mime):
+            calls.append(mime)
+            return IdentificationReport(part_name=first["part_name"], oem_part_number=first["oem_part_number"], provider="test-provider")
+        monkeypatch.setattr(vision, "identify", provider)
+        monkeypatch.setattr(photo_match, "suggestions", lambda image: [])
+        response = client.post("/api/identify", files={"file": ("wheel.jpg", sample_parts["wheel-hub"].read_bytes(), "image/jpeg")})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["report"]["provider"] == "test-provider"
+        assert body["matched_part"]["id"] == first["id"]
+        assert "No local photo suggestions found" in body["report"]["warnings"][0]
+        assert calls == ["image/jpeg"]
+    finally:
+        client.delete(f"/api/parts/{first['id']}")

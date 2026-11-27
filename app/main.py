@@ -21,6 +21,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from . import auth, cards, db, image_review, photo_match, importers, inventory_pdf, links, shop_profile, stock_bundle, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
@@ -354,7 +355,7 @@ def _write_thumbnail(source: Path, thumb: Path) -> None:
     os.replace(tmp, thumb)
 
 
-def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
+def _store_upload(raw: bytes, filename: str, *, thumbnail: bool = True) -> tuple[Path, bytes]:
     try:
         with Image.open(io.BytesIO(raw)) as probe:
             probe.verify()
@@ -373,10 +374,11 @@ def _store_upload(raw: bytes, filename: str) -> tuple[Path, bytes]:
     tmp = path.with_name(f".{name}.{uuid.uuid4().hex[:6]}.tmp")
     tmp.write_bytes(normalised)
     os.replace(tmp, path)
-    try:
-        _write_thumbnail(path, _thumb_path(path))
-    except OSError as exc:  # thumbnails are an optimisation; never fail the upload
-        log.warning("Thumbnail generation failed for %s: %s", name, exc)
+    if thumbnail:
+        try:
+            _write_thumbnail(path, _thumb_path(path))
+        except OSError as exc:  # thumbnails are an optimisation; never fail the upload
+            log.warning("Thumbnail generation failed for %s: %s", name, exc)
     return path, normalised
 
 
@@ -418,19 +420,20 @@ async def identify(request: Request, file: UploadFile = File(...)) -> IdentifyRe
     if mime not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"unsupported image type: {mime}")
 
-    path, normalised = _store_upload(raw, file.filename or "upload.jpg")
-    # Always check local stock first. A clear but still unverified local match
-    # avoids sending this photo to an external provider.
-    photo_candidates = photo_match.suggestions(normalised)
-    local = photo_match.clear_local_report(photo_candidates)
+    # Scans do not need a thumbnail immediately; the thumbnail route creates it
+    # lazily if the photo is later attached to an inventory item. Keep CPU and
+    # provider I/O off the event loop so other requests remain responsive.
+    path, normalised = await run_in_threadpool(_store_upload, raw, file.filename or "upload.jpg", thumbnail=False)
+    photo_candidates = await run_in_threadpool(photo_match.suggestions, normalised)
+    local = photo_match.local_report(photo_candidates)
     if local:
         report, matched = local
         candidate_parts = [candidate["part"] for candidate in photo_candidates]
     else:
-        report = vision.identify(normalised, "image/jpeg")
-        matched, candidates = match_part(report)
+        report = await run_in_threadpool(vision.identify, normalised, "image/jpeg")
+        matched, candidates = await run_in_threadpool(match_part, report)
         candidate_parts = [candidate.part for candidate in candidates]
-        report.warnings.insert(0, "No clear local photo match; the configured identifier was used.")
+        report.warnings.insert(0, "No local photo suggestions found; the configured identifier was used.")
 
     if matched is not None:
         # Never silently adopt the catalogue's numbers: say when they differ.

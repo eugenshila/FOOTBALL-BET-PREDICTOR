@@ -90,13 +90,16 @@ def list_parts(
     in_stock_only: bool = False,
     limit: int = 200,
     path: Path | str | None = None,
+    include_receipt: bool = True,
 ) -> list[InventoryPart]:
     with connect(path) as conn:
         like = conn.like
-        sql = """SELECT parts.*,
+        # Photo matching does not need receipt dates for every inventory row.
+        # Avoid a correlated movement lookup per part on that hot path.
+        sql = ("""SELECT parts.*,
                     (SELECT MAX(m.created_at) FROM movements m
                      WHERE m.part_id = parts.id AND m.delta > 0) AS last_received_at
-                 FROM parts"""
+                 FROM parts""" if include_receipt else "SELECT parts.* FROM parts")
         clauses: list[str] = []
         params: list[object] = []
         if query:
@@ -114,6 +117,17 @@ def list_parts(
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_part(r) for r in rows]
+
+
+def receipt_dates_for(part_ids: list[int], *, path: Path | str | None = None) -> dict[int, datetime]:
+    """Fetch receipt timestamps only for the handful of photo search results."""
+    if not part_ids:
+        return {}
+    placeholders = ",".join("?" for _ in part_ids)
+    with connect(path) as conn:
+        rows = conn.execute(f"""SELECT part_id, MAX(created_at) AS received_at FROM movements
+                                WHERE delta > 0 AND part_id IN ({placeholders}) GROUP BY part_id""", part_ids).fetchall()
+    return {int(row["part_id"]): datetime.fromisoformat(row["received_at"]) for row in rows if row["received_at"]}
 
 
 def get_part(part_id: int, path: Path | str | None = None) -> InventoryPart | None:
