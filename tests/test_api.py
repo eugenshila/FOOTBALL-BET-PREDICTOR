@@ -45,7 +45,7 @@ def test_identify_returns_three_section_report(client, sample_parts):
 
     report = body["report"]
     assert report["part_name"]
-    assert report["provider"] == "offline"
+    assert report["provider"] in {"offline", "local-inventory"}
     assert body["scan_id"]
 
     markdown = body["report_markdown"]

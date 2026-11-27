@@ -353,11 +353,8 @@ async function identify() {
   if (!state.selectedFile) return;
   const token = ++identifyToken;
   const status = $("#identify-status");
-  const grounded = state.config?.vision?.grounding_active;
   status.className = "status busy";
-  status.textContent = grounded
-    ? "Identifying and searching the web for part numbers…"
-    : "Analysing the photo…";
+  status.textContent = "Checking local photos first, then identifying if needed…";
   $("#btn-identify").disabled = true;
 
   const upload = await prepareImageForUpload(state.selectedFile);
@@ -375,7 +372,9 @@ async function identify() {
     status.className = "status";
     const conf = result.report.overall_confidence;
     const via = result.report.grounded ? `${result.report.provider} + web search` : result.report.provider;
-    status.textContent = `Done — ${conf} confidence via ${via}.`;
+    status.textContent = result.report.provider === "local-inventory"
+      ? "Local photo suggestion found — confirm the part before updating stock."
+      : `Done — ${conf} confidence via ${via}.`;
     await loadParts();
     populateStudioSelect();
   } catch (error) {
@@ -428,7 +427,8 @@ function renderReport(result) {
 function renderMatch(result) {
   const block = $("#match-block");
   block.hidden = false;
-  const part = result.matched_part;
+  const photoCandidates = result.photo_candidates || [];
+  const part = result.selected_part || result.matched_part || photoCandidates[0]?.part;
   const badge = $("#match-badge");
   const body = $("#match-body");
 
@@ -445,18 +445,24 @@ function renderMatch(result) {
         <button class="btn primary" id="btn-adopt-report">Add to inventory from this scan</button>
       </div>`;
     $("#btn-adopt-report").addEventListener("click", () => openDrawer(prefillFromReport(result.report)));
-    $$("[data-adopt]", body).forEach((button) =>
-      button.addEventListener("click", () => openStudioFor(Number(button.dataset.adopt))));
+    $$("[data-adopt]", body).forEach((button) => button.addEventListener("click", () => {
+      result.selected_part = result.candidates.find((candidate) => candidate.id === Number(button.dataset.adopt));
+      renderMatch(result);
+    }));
     return;
   }
 
-  badge.className = `badge ${part.verified ? "ok" : "warn"}`;
-  badge.textContent = part.verified ? "verified stock record" : "unverified record";
-  const imageUrl = part.image_path
-    ? mediaUrl(part.image_path)
-    : (result.image_path ? mediaUrl(result.image_path) : "");
+  badge.className = "badge warn";
+  badge.textContent = "possible match — confirm part";
+  const imageUrl = photoCandidates.find((c) => c.part.id === part.id)?.reference_url
+    || (part.image_path ? mediaUrl(part.image_path) : "");
 
+  const otherCandidates = [result.matched_part, ...(result.candidates || [])]
+    .filter((candidate, index, all) => candidate && !photoCandidates.some((c) => c.part.id === candidate.id) && all.findIndex((c) => c?.id === candidate.id) === index);
   body.innerHTML = `
+    <p class="small muted">Photo and identification matches are suggestions, not proof. Check the physical part, OEM and fitment before adding stock.</p>
+    ${photoCandidates.length ? `<div class="row gap wrap warehouse-results">${photoCandidates.map((c) => `<button type="button" class="btn small-btn" data-photo-candidate="${c.part.id}">Photo: ${escapeHtml(c.part.part_name)} · ${escapeHtml(c.part.oem_part_number || "no OEM")}</button>`).join("")}</div>` : ""}
+    ${otherCandidates.length ? `<div class="row gap wrap warehouse-results">${otherCandidates.map((c) => `<button type="button" class="btn small-btn" data-report-candidate="${c.id}">Report: ${escapeHtml(c.part_name)} · ${escapeHtml(c.oem_part_number || "no OEM")}</button>`).join("")}</div>` : ""}
     <div class="match-card">
       ${imageUrl ? `<img class="match-photo" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(part.part_name)}" />` : '<div class="image-fallback large">No photo added</div>'}
       <div>
@@ -469,24 +475,39 @@ function renderMatch(result) {
         </div>
         <div class="row gap wrap mt">
           <button class="btn primary" id="btn-match-cards">Generate promo cards</button>
-          <button class="btn" data-adjust="1" data-id="${part.id}">＋1 stock</button>
+          <label class="field"><span>Quantity received</span><input id="scan-receive-qty" class="input" type="number" min="1" step="1" value="1" /></label>
+          <button class="btn" data-adjust="1" data-id="${part.id}">Confirm match &amp; add stock</button>
           <button class="btn" data-edit="${part.id}">Edit record</button>
           ${part.verified ? "" : `<button class="btn" data-verify="${part.id}">Mark verified</button>`}
         </div>
       </div>
     </div>`;
 
+  $$("[data-photo-candidate]", body).forEach((button) => button.addEventListener("click", () => {
+    result.selected_part = photoCandidates.find((c) => c.part.id === Number(button.dataset.photoCandidate)).part;
+    renderMatch(result);
+  }));
+  $$("[data-report-candidate]", body).forEach((button) => button.addEventListener("click", () => {
+    result.selected_part = otherCandidates.find((c) => c.id === Number(button.dataset.reportCandidate));
+    renderMatch(result);
+  }));
   $("#btn-match-cards").addEventListener("click", () => openStudioFor(part.id));
   $$("[data-adjust]", body).forEach((button) => button.addEventListener("click", async () => {
+    const quantity = Number($("#scan-receive-qty").value);
+    if (!Number.isSafeInteger(quantity) || quantity < 1) { toast("Enter a whole quantity of at least 1", true); return; }
+    if (!confirm(`Confirm ${part.part_name} (${part.oem_part_number || "no OEM"}) is the same part and add ${quantity} to stock?`)) return;
+    button.disabled = true;
     try {
-      await api(`/api/parts/${button.dataset.id}/adjust`, {
+      const updated = await api(`/api/parts/${button.dataset.id}/adjust`, {
         method: "POST",
-        body: JSON.stringify({ part_id: Number(button.dataset.id), delta: 1, reason: "scan_received", note: "received at counter" }),
+        body: JSON.stringify({ part_id: Number(button.dataset.id), delta: quantity, reason: "scan_received", note: "photo match confirmed by user" }),
       });
-      toast("Stock updated");
+      result.selected_part = updated;
+      result.photo_candidates = photoCandidates.map((c) => c.part.id === updated.id ? { ...c, part: updated } : c);
+      toast("Stock received");
       await loadParts();
       renderMatch(result);
-    } catch (error) { toast(error.message, true); }
+    } catch (error) { toast(error.message, true); button.disabled = false; }
   }));
   $$("[data-edit]", body).forEach((button) => button.addEventListener("click", () => {
     const record = state.parts.find((p) => p.id === Number(button.dataset.edit));
@@ -494,9 +515,11 @@ function renderMatch(result) {
   }));
   $$("[data-verify]", body).forEach((button) => button.addEventListener("click", async () => {
     try {
-      await api(`/api/parts/${button.dataset.verify}`, {
+      const updated = await api(`/api/parts/${button.dataset.verify}`, {
         method: "PATCH", body: JSON.stringify({ verified: true }),
       });
+      result.selected_part = updated;
+      result.photo_candidates = photoCandidates.map((c) => c.part.id === updated.id ? { ...c, part: updated } : c);
       toast("Record verified");
       await loadParts();
       renderMatch(result);
@@ -791,7 +814,7 @@ async function restoreWorkspace() {
       state.receivedSort = [-1, 0, 1].includes(workspace.sort) ? workspace.sort : 0;
       $("#sort-received").textContent = state.receivedSort === -1 ? "Date received ↓" : state.receivedSort === 1 ? "Date received ↑" : "Date received ↕";
       $$("[data-stock-filter]").forEach((el) => { const active = el.dataset.stockFilter === state.stockFilter; el.classList.toggle("active", active); el.setAttribute("aria-pressed", String(active)); });
-      switchView(["identify", "inventory", "reports", "settings", "studio"].includes(workspace.view) ? workspace.view : "identify", true);
+      switchView(["identify", "inventory", "warehouse", "reports", "settings", "studio"].includes(workspace.view) ? workspace.view : "identify", true);
       if (Number.isFinite(workspace.scroll)) requestAnimationFrame(() => window.scrollTo(0, workspace.scroll));
     }
     const draft = JSON.parse(localStorage.getItem(storageKey("draft")) || "null");
@@ -1276,6 +1299,7 @@ function switchView(name, restoring = false) {
   const descriptions = {
     identify: ["Identify a part", "Start with a photo. Find the details that matter.", "PHOTO → REVIEW → STOCK"],
     inventory: ["Your inventory", "Every OEM number, shelf and stock level. In one place.", "FIND → VERIFY → ORGANISE"],
+    warehouse: ["Warehouse", "Record delivery handovers and trace stock issued in FIFO order.", "FIND → HAND OVER → RECORD"],
     reports: ["Reports", "Verification and inventory exports for your shop.", "REVIEW → EXPORT"],
     settings: ["Shop settings", "Your business details and public social profiles.", "EDIT → SAVE"],
     studio: ["Promo studio", "Turn verified stock into something worth sharing.", "CHOOSE → CREATE → SHARE"],
@@ -1287,8 +1311,78 @@ function switchView(name, restoring = false) {
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === `view-${name}`));
   if (name === "inventory") loadParts($("#search").value);
   if (name === "reports") loadVerificationSummary();
+  if (name === "warehouse") { searchWarehouse(); loadWarehouseHistory(); }
   if (name === "studio") populateStudioSelect();
   if (!restoring) window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* ── warehouse delivery handovers ─────────────────────────── */
+let warehousePart = null;
+let warehouseLines = [];
+let warehouseSearchToken = 0;
+let warehouseHistoryToken = 0;
+async function searchWarehouse() {
+  const token = ++warehouseSearchToken;
+  const query = $("#warehouse-search").value.trim();
+  try {
+    const parts = await api(`/api/parts?q=${encodeURIComponent(query)}&limit=100`);
+    if (token !== warehouseSearchToken) return;
+    const box = $("#warehouse-results");
+    box.innerHTML = parts.length ? parts.map((part) => `<button type="button" class="btn ghost small-btn" data-warehouse-part="${part.id}">${escapeHtml(part.part_name)} · ${escapeHtml(part.oem_part_number || "no OEM")} · ${part.quantity} in stock</button>`).join("") : '<p class="muted small">No matching parts.</p>';
+    $$("[data-warehouse-part]", box).forEach((button) => button.addEventListener("click", () => selectWarehousePart(Number(button.dataset.warehousePart))));
+  } catch (error) { $("#warehouse-status").textContent = error.message; }
+}
+async function selectWarehousePart(id) {
+  try {
+    const result = await api(`/api/warehouse/parts/${id}/fifo`);
+    warehousePart = result.part;
+    $("#warehouse-selected").hidden = false;
+    $("#warehouse-add-row").hidden = false;
+    $("#warehouse-selected").innerHTML = `<strong>${escapeHtml(result.part.part_name)}</strong><p class="small muted">OEM ${escapeHtml(result.part.oem_part_number || "—")} · bin ${escapeHtml(result.part.bin_location || "unassigned")} · ${result.part.quantity} available</p>`;
+    $("#warehouse-lots").innerHTML = `<p><strong>FIFO stock, oldest first</strong></p>${result.lots.length ? result.lots.map((lot) => `<p>${escapeHtml(lot.received_at || "Existing stock — receipt date unknown")} · ${lot.remaining} available</p>`).join("") : "<p>Out of stock.</p>"}${result.has_unknown_history ? "<p>Some older stock has no reliable receipt history. Its age cannot be verified.</p>" : ""}`;
+    $("#warehouse-add-qty").value = "1";
+    $("#warehouse-add-qty").max = result.part.quantity;
+    $("#warehouse-add").disabled = result.part.quantity < 1;
+  } catch (error) { toast(error.message, true); }
+}
+function renderWarehouseLines() {
+  const box = $("#warehouse-lines");
+  box.innerHTML = warehouseLines.length ? `<strong>Parts on this order</strong>${warehouseLines.map((line) => `<div class="row gap wrap"><span>${escapeHtml(line.part.part_name)} · ${escapeHtml(line.part.oem_part_number || "no OEM")} · quantity ${line.quantity}</span><button type="button" class="btn ghost small-btn" data-remove-warehouse="${line.part.id}">Remove</button></div>`).join("")}` : "No parts added yet.";
+  $$("[data-remove-warehouse]", box).forEach((button) => button.addEventListener("click", () => { warehouseLines = warehouseLines.filter((line) => line.part.id !== Number(button.dataset.removeWarehouse)); renderWarehouseLines(); }));
+}
+function addWarehousePart() {
+  const quantity = Number($("#warehouse-add-qty").value);
+  if (!warehousePart || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > warehousePart.quantity) { toast("Enter a valid quantity within available stock", true); return; }
+  if (warehouseLines.some((line) => line.part.id === warehousePart.id)) { toast("Part already added. Remove it first to change the quantity.", true); return; }
+  warehouseLines.push({ part: warehousePart, quantity });
+  renderWarehouseLines();
+}
+async function loadWarehouseHistory() {
+  const token = ++warehouseHistoryToken;
+  try {
+    const q = $("#warehouse-history-search").value.trim();
+    const orders = await api(`/api/warehouse/delivery-orders?limit=100&q=${encodeURIComponent(q)}`);
+    if (token !== warehouseHistoryToken) return;
+    $("#warehouse-history").innerHTML = orders.length ? orders.map((order) => `<article class="warehouse-issue"><strong>Delivery order ${escapeHtml(order.order_number)}</strong><p class="small muted">Handed over ${escapeHtml(order.handed_over_at)}<br />Collected by ${escapeHtml(order.collected_by)} · Recorded by ${escapeHtml(order.recorded_by)}${order.note ? `<br />${escapeHtml(order.note)}` : ""}</p>${order.lines.map((line) => `<p class="small"><strong>${escapeHtml(line.part_name)}</strong> · ${escapeHtml(line.oem_part_number || "no OEM")} · ${line.quantity}<br /><span class="muted">FIFO: ${line.allocations.map((a) => `${a.quantity} from ${escapeHtml(a.received_at || "unknown opening stock")}`).join("; ")}</span></p>`).join("")}</article>`).join("") : '<p class="muted small">No matching delivery orders.</p>';
+  } catch (error) { $("#warehouse-history").textContent = error.message; }
+}
+async function submitWarehouseIssue(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const number = form.elements.order_number.value.trim();
+  const collector = form.elements.collected_by.value.trim();
+  if (!number || !collector || !warehouseLines.length) { toast("Add parts, a delivery order number and the collector’s name", true); return; }
+  if (!confirm(`Confirm handover of ${warehouseLines.length} part line(s) on ${number} to ${collector}? Stock will be deducted oldest first.`)) return;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    await api("/api/warehouse/delivery-orders", { method: "POST", body: JSON.stringify({ order_number: number, collected_by: collector, note: form.elements.note.value.trim(), lines: warehouseLines.map((line) => ({ part_id: line.part.id, quantity: line.quantity })) }) });
+    form.reset(); warehouseLines = []; renderWarehouseLines();
+    $("#warehouse-status").textContent = `Delivery order ${number} saved.`;
+    await Promise.all([warehousePart ? selectWarehousePart(warehousePart.id) : Promise.resolve(), searchWarehouse(), loadWarehouseHistory(), loadParts()]);
+    toast("Delivery handover recorded");
+  } catch (error) { $("#warehouse-status").textContent = error.message; toast(error.message, true); }
+  finally { button.disabled = false; }
 }
 
 function wireUi() {
@@ -1339,6 +1433,13 @@ function wireUi() {
     } catch (error) { toast(`Sign out could not finish clearing local data: ${error.message}. Clear this site’s browser storage and try again.`, true); }
   });
   $("#shop-settings-form").addEventListener("submit", saveShopSettings);
+  let warehouseTimer;
+  $("#warehouse-search").addEventListener("input", () => { clearTimeout(warehouseTimer); warehouseTimer = setTimeout(searchWarehouse, 220); });
+  $("#warehouse-form").addEventListener("submit", submitWarehouseIssue);
+  $("#warehouse-add").addEventListener("click", addWarehousePart);
+  let historyTimer;
+  $("#warehouse-history-search").addEventListener("input", () => { clearTimeout(historyTimer); historyTimer = setTimeout(loadWarehouseHistory, 220); });
+  $("#warehouse-refresh").addEventListener("click", loadWarehouseHistory);
   $("#part-form").addEventListener("submit", savePart);
   $("#part-form").addEventListener("input", saveDraft);
   $("#part-form").addEventListener("change", (event) => { if (event.target.name !== "part_image") saveDraft(); });

@@ -218,6 +218,38 @@ class StockMovement(BaseModel):
     created_at: datetime | None = None
 
 
+class DeliveryLineCreate(BaseModel):
+    part_id: int = Field(gt=0, strict=True)
+    quantity: int = Field(gt=0, strict=True)
+
+
+class DeliveryOrderCreate(BaseModel):
+    order_number: str = Field(min_length=1, max_length=100)
+    collected_by: str = Field(min_length=1, max_length=160)
+    note: str = Field(default="", max_length=500)
+    lines: list[DeliveryLineCreate] = Field(min_length=1, max_length=100)
+
+    @field_validator("order_number", "collected_by")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("This field is required")
+        return value.strip()
+
+    @field_validator("lines")
+    @classmethod
+    def unique_parts(cls, lines: list[DeliveryLineCreate]) -> list[DeliveryLineCreate]:
+        if len({line.part_id for line in lines}) != len(lines):
+            raise ValueError("Each part can appear only once per delivery order")
+        return lines
+
+
+class PhotoCandidate(BaseModel):
+    part: InventoryPart
+    distance: float
+    reference_url: str
+
+
 class ScanRecord(BaseModel):
     id: int | None = None
     image_path: str
@@ -260,6 +292,7 @@ class IdentifyResponse(BaseModel):
     report: IdentificationReport
     matched_part: InventoryPart | None = None
     candidates: list[InventoryPart] = Field(default_factory=list)
+    photo_candidates: list[PhotoCandidate] = Field(default_factory=list)
     report_markdown: str = ""
     lens_url: str = ""
     google_search_url: str = ""

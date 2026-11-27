@@ -473,3 +473,11 @@ body { background: radial-gradient(ellipse 85% 650px at 90% 0, #edc66b06, transp
   .report-count { padding: 12px; }
   .import-block { margin: 16px; }
 }
+
+/* Warehouse search and immutable issue history */
+.warehouse-results { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0 1.2rem; }
+#warehouse-form .field { margin: .8rem 0; }
+#warehouse-lots { margin: .8rem 0; }
+#warehouse-lots p { margin: .3rem 0; }
+.warehouse-issue { border-bottom: 1px solid var(--border, #30343b); padding: .9rem 0; }
+.warehouse-issue p { margin: .35rem 0; }

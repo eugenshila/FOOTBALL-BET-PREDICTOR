@@ -194,47 +194,60 @@ def create_part(
     return _row_to_part(row)
 
 
+def _lock_inventory(conn: storage.Connection) -> None:
+    # SQLite must reserve the write lock before reading the balance. PostgreSQL
+    # locks the relevant part row below instead.
+    if conn.dialect == storage.SQLITE:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _part_lock_query(conn: storage.Connection) -> str:
+    return "SELECT * FROM parts WHERE id = ?" + (" FOR UPDATE" if conn.dialect == storage.POSTGRES else "")
+
+
 def update_part(
     part_id: int, patch: PartUpdate, *, path: Path | str | None = None
 ) -> InventoryPart | None:
-    existing = get_part(part_id, path)
-    if existing is None:
-        return None
-    data = patch.model_dump(exclude_unset=True)
-    if not data:
-        return existing
-
-    qty_delta = 0
-    if "quantity" in data and data["quantity"] is not None:
-        qty_delta = int(data["quantity"]) - existing.quantity
-        if data["quantity"] < 0:
-            raise ValueError("quantity cannot be negative")
-    if "unit_price" in data and data["unit_price"] is not None and data["unit_price"] < 0:
-        raise ValueError("unit_price cannot be negative")
-
-    columns: dict[str, object] = {}
-    for key, value in data.items():
-        if value is None:
-            continue
-        if key == "fitment":
-            columns["fitment"] = json.dumps([VehicleFitment(**f).model_dump() for f in value])
-        elif key in {"alternate_numbers", "superseded_numbers", "technical_notes"}:
-            columns[key] = json.dumps(value)
-        elif key == "condition":
-            columns[key] = value.value if isinstance(value, Condition) else str(value)
-        elif key == "verified":
-            columns["verified"] = int(bool(value))
-        elif key == "part_name":
-            columns["part_name"] = " ".join(str(value).split())
-        else:
-            columns[key] = value
-    if not columns and not qty_delta:
-        return existing
-
-    columns["updated_at"] = _now()
-    assignments = ", ".join(f"{col} = ?" for col in columns)
-    params = [*columns.values(), part_id]
     with connect(path) as conn:
+        _lock_inventory(conn)
+        row = conn.execute(_part_lock_query(conn), (part_id,)).fetchone()
+        if row is None:
+            return None
+        existing = _row_to_part(row)
+        data = patch.model_dump(exclude_unset=True)
+        if not data:
+            return existing
+
+        qty_delta = 0
+        if "quantity" in data and data["quantity"] is not None:
+            qty_delta = int(data["quantity"]) - existing.quantity
+            if data["quantity"] < 0:
+                raise ValueError("quantity cannot be negative")
+        if "unit_price" in data and data["unit_price"] is not None and data["unit_price"] < 0:
+            raise ValueError("unit_price cannot be negative")
+
+        columns: dict[str, object] = {}
+        for key, value in data.items():
+            if value is None:
+                continue
+            if key == "fitment":
+                columns["fitment"] = json.dumps([VehicleFitment(**f).model_dump() for f in value])
+            elif key in {"alternate_numbers", "superseded_numbers", "technical_notes"}:
+                columns[key] = json.dumps(value)
+            elif key == "condition":
+                columns[key] = value.value if isinstance(value, Condition) else str(value)
+            elif key == "verified":
+                columns["verified"] = int(bool(value))
+            elif key == "part_name":
+                columns["part_name"] = " ".join(str(value).split())
+            else:
+                columns[key] = value
+        if not columns and not qty_delta:
+            return existing
+
+        columns["updated_at"] = _now()
+        assignments = ", ".join(f"{col} = ?" for col in columns)
+        params = [*columns.values(), part_id]
         conn.execute(f"UPDATE parts SET {assignments} WHERE id = ?", params)
         if qty_delta:
             conn.execute(
@@ -242,7 +255,7 @@ def update_part(
                 (part_id, qty_delta, "manual_edit", "quantity edited", columns["updated_at"]),
             )
         row = conn.execute("SELECT * FROM parts WHERE id = ?", (part_id,)).fetchone()
-    return _row_to_part(row)
+        return _row_to_part(row)
 
 
 def adjust_stock(
@@ -253,9 +266,10 @@ def adjust_stock(
     note: str = "",
     path: Path | str | None = None,
 ) -> InventoryPart | None:
-    stamp = _now()
     with connect(path) as conn:
-        row = conn.execute("SELECT quantity FROM parts WHERE id = ?", (part_id,)).fetchone()
+        _lock_inventory(conn)
+        stamp = _now()
+        row = conn.execute(_part_lock_query(conn), (part_id,)).fetchone()
         if row is None:
             return None
         new_qty = int(row["quantity"]) + int(delta)
@@ -268,6 +282,127 @@ def adjust_stock(
         )
         updated = conn.execute("SELECT * FROM parts WHERE id = ?", (part_id,)).fetchone()
     return _row_to_part(updated)
+
+
+def _fifo_lots(quantity: int, movements: list) -> tuple[list[dict], bool]:
+    """Replay the longest consistent history suffix, keeping legacy stock undated.
+
+    Movements are ordered by their database ID. If an old, incomplete history
+    cannot explain the current balance, preserve the longest recent suffix that
+    can, and treat the rest as an unknown opening balance rather than inventing
+    receipt dates. This also keeps future receipts usable for FIFO.
+    """
+    trailing = 0
+    start = len(movements)
+    for index in range(len(movements) - 1, -1, -1):
+        next_trailing = trailing + int(movements[index]["delta"])
+        if quantity - next_trailing < 0:
+            break
+        trailing = next_trailing
+        start = index
+    opening = quantity - trailing
+    lots = ([{"movement_id": None, "received_at": None, "remaining": opening}] if opening else [])
+    for movement in movements[start:]:
+        delta = int(movement["delta"])
+        if delta > 0:
+            lots.append({"movement_id": movement["id"], "received_at": movement["created_at"], "remaining": delta})
+        elif delta < 0:
+            needed = -delta
+            for lot in lots:
+                take = min(needed, lot["remaining"])
+                lot["remaining"] -= take
+                needed -= take
+                if not needed:
+                    break
+    return [lot for lot in lots if lot["remaining"]], bool(opening or start)
+
+
+def fifo_for(part_id: int, *, path: Path | str | None = None) -> dict | None:
+    with connect(path) as conn:
+        # Consistent snapshot for SQLite and serialisation with issues on Postgres.
+        _lock_inventory(conn)
+        part = conn.execute(_part_lock_query(conn), (part_id,)).fetchone()
+        if not part:
+            return None
+        movements = conn.execute("SELECT * FROM movements WHERE part_id = ? ORDER BY id", (part_id,)).fetchall()
+        lots, estimated = _fifo_lots(int(part["quantity"]), movements)
+        return {"part": _row_to_part(part), "lots": lots, "has_unknown_history": estimated}
+
+
+def create_delivery_order(order_number: str, collected_by: str, recorded_by: str, note: str,
+                          lines: list[dict], *, path: Path | str | None = None) -> dict:
+    """Record a completed handover and allocate all lines atomically in FIFO order."""
+    number = order_number.strip()
+    if not number or not collected_by.strip() or not recorded_by.strip() or not lines:
+        raise ValueError("Delivery order, collector, signed-in user and parts are required")
+    if len({line["part_id"] for line in lines}) != len(lines) or any(line["quantity"] <= 0 for line in lines):
+        raise ValueError("Each part must appear once with a positive quantity")
+    with connect(path) as conn:
+        _lock_inventory(conn)
+        # Serialize by part id in a consistent order, avoiding PostgreSQL deadlocks.
+        parts = {}
+        for line in sorted(lines, key=lambda item: item["part_id"]):
+            part = conn.execute(_part_lock_query(conn), (line["part_id"],)).fetchone()
+            if part is None:
+                raise ValueError(f"Part #{line['part_id']} no longer exists")
+            if line["quantity"] > int(part["quantity"]):
+                raise ValueError(f"Not enough stock for {part['part_name']}")
+            parts[line["part_id"]] = part
+        stamp = _now()
+        inserted = conn.execute("""INSERT INTO delivery_orders
+            (order_number, order_key, collected_by, recorded_by, note, handed_over_at)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(order_key) DO NOTHING""",
+            (number, number.upper(), collected_by.strip(), recorded_by.strip(), note.strip(), stamp))
+        if inserted.rowcount != 1:
+            raise ValueError("This delivery order number is already recorded")
+        order_id = conn.execute("SELECT id FROM delivery_orders WHERE order_key = ?", (number.upper(),)).fetchone()["id"]
+        output_lines = []
+        for line in lines:
+            part = parts[line["part_id"]]
+            movements = conn.execute("SELECT * FROM movements WHERE part_id = ? ORDER BY id", (line["part_id"],)).fetchall()
+            lots, _ = _fifo_lots(int(part["quantity"]), movements)
+            needed, allocations = line["quantity"], []
+            for lot in lots:
+                take = min(needed, lot["remaining"])
+                if take:
+                    allocations.append({"movement_id": lot["movement_id"], "received_at": lot["received_at"], "quantity": take})
+                    needed -= take
+                if not needed:
+                    break
+            if needed:
+                raise ValueError("Stock history could not be reconciled")
+            details = {"part_id": line["part_id"], "part_name": part["part_name"],
+                       "oem_part_number": part["oem_part_number"] or "", "bin_location": part["bin_location"] or "",
+                       "quantity": line["quantity"], "allocations": allocations}
+            conn.execute("""INSERT INTO delivery_order_lines
+                (order_id, part_id, part_name, oem_part_number, bin_location, quantity, allocations)
+                VALUES (?,?,?,?,?,?,?)""", (order_id, details["part_id"], details["part_name"],
+                     details["oem_part_number"], details["bin_location"], details["quantity"], json.dumps(allocations)))
+            conn.execute("UPDATE parts SET quantity = quantity - ?, updated_at = ? WHERE id = ?", (line["quantity"], stamp, line["part_id"]))
+            conn.execute("INSERT INTO movements (part_id, delta, reason, note, created_at) VALUES (?,?,?,?,?)",
+                         (line["part_id"], -line["quantity"], "delivery_handover", f"Delivery order #{order_id}", stamp))
+            output_lines.append(details)
+        return {"id": order_id, "order_number": number, "collected_by": collected_by.strip(),
+                "recorded_by": recorded_by.strip(), "note": note.strip(), "handed_over_at": stamp, "lines": output_lines}
+
+
+def delivery_orders(*, query: str = "", limit: int = 100, path: Path | str | None = None) -> list[dict]:
+    with connect(path) as conn:
+        like = conn.like
+        needle = f"%{query}%"
+        rows = conn.execute(f"""SELECT * FROM delivery_orders d WHERE
+            (d.order_number {like} ? OR d.collected_by {like} ? OR d.recorded_by {like} ? OR
+             EXISTS (SELECT 1 FROM delivery_order_lines l WHERE l.order_id = d.id AND
+                 (l.part_name {like} ? OR l.oem_part_number {like} ?)))
+            ORDER BY d.id DESC LIMIT ?""", (needle, needle, needle, needle, needle, limit)).fetchall()
+        out = []
+        for row in rows:
+            lines = conn.execute("SELECT * FROM delivery_order_lines WHERE order_id = ? ORDER BY id", (row["id"],)).fetchall()
+            order = dict(row)
+            order.pop("order_key", None)
+            order["lines"] = [{**dict(line), "allocations": json.loads(line["allocations"])} for line in lines]
+            out.append(order)
+        return out
 
 
 def delete_part(part_id: int, *, path: Path | str | None = None) -> bool:
