@@ -34,6 +34,7 @@
   <div class="nav-items" role="tablist" aria-label="Parts workspace" aria-orientation="vertical">
     <button id="tab-identify" class="tab active" data-view="identify" role="tab" aria-controls="view-identify" aria-selected="true"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3M7 12h10"/><rect x="8" y="8" width="8" height="8" rx="2"/></svg><span>Identify a part</span><span class="nav-dot"></span></button>
     <button id="tab-inventory" class="tab" data-view="inventory" role="tab" aria-controls="view-inventory" aria-selected="false" tabindex="-1"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg><span>Inventory</span></button>
+    <button id="tab-warehouse" class="tab" data-view="warehouse" role="tab" aria-controls="view-warehouse" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 10 12 4l9 6v10H3zM8 20v-7h8v7"/></svg><span>Warehouse</span></button>
     <button id="tab-studio" class="tab" data-view="studio" role="tab" aria-controls="view-studio" aria-selected="false" tabindex="-1"><svg class="icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m21 15-6-6-7 12m-5-5 5-5 3 3"/></svg><span>Promo studio</span></button>
     <button id="tab-reports" class="tab" data-view="reports" role="tab" aria-controls="view-reports" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 3h16v18H4zM8 8h8M8 12h8M8 16h5"/></svg><span>Reports</span></button>
     <button id="tab-settings" class="tab" data-view="settings" role="tab" aria-controls="view-settings" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v10M7 12h10"/></svg><span>Settings</span></button>
@@ -209,6 +210,39 @@
       <button id="close-image-review" class="btn ghost small-btn" type="button">Close review</button></div>
     <p class="muted small">Uploaded photos and local catalogue suggestions are not a confirmed identification. Check the OEM, fitment and physical part. Approving a photo does not verify a part for sale. Existing photos are kept until you explicitly replace them.</p>
     <div id="image-review-rows" aria-live="polite"></div>
+  </section>
+
+  <!-- Completed delivery handovers; no pick-and-pack stage. -->
+  <section id="view-warehouse" role="tabpanel" aria-labelledby="tab-warehouse" class="view">
+    <div class="grid-2">
+      <div class="panel">
+        <h2 class="panel-title">Record a delivery handover</h2>
+        <p class="muted small">Search and add the parts being given out. Confirm the delivery order only when the parts are handed over. Stock is allocated oldest first.</p>
+        <label class="field"><span>Search part name, OEM or bin</span><input id="warehouse-search" class="input" type="search" placeholder="Search inventory" /></label>
+        <div id="warehouse-results" class="warehouse-results" aria-live="polite"></div>
+        <div id="warehouse-selected" class="settings-note" hidden></div>
+        <div id="warehouse-lots" class="muted small"></div>
+        <div id="warehouse-add-row" class="row gap wrap" hidden>
+          <label class="field"><span>Quantity</span><input id="warehouse-add-qty" class="input" type="number" min="1" step="1" value="1" /></label>
+          <button id="warehouse-add" class="btn" type="button">Add part to order</button>
+        </div>
+        <form id="warehouse-form">
+          <div id="warehouse-lines" class="settings-note" aria-live="polite">No parts added yet.</div>
+          <label class="field"><span>Delivery order number *</span><input class="input" name="order_number" maxlength="100" required placeholder="e.g. DO-1024" /></label>
+          <label class="field"><span>Collected / picked up by *</span><input class="input" name="collected_by" maxlength="160" required placeholder="Name of person collecting the parts" /></label>
+          <label class="field"><span>Note (optional)</span><input class="input" name="note" maxlength="500" placeholder="Customer, destination or reference" /></label>
+          <button class="btn primary" type="submit">Confirm handover &amp; save order</button>
+          <p class="muted small">The current UTC time and signed-in account are recorded. Nothing is deducted until you confirm.</p>
+        </form>
+        <p id="warehouse-status" class="status" role="status"></p>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2 class="panel-title">Delivery order history</h2><button type="button" class="btn ghost small-btn" id="warehouse-refresh">Refresh</button></div>
+        <label class="field"><span>Search orders, collector or part</span><input id="warehouse-history-search" class="input" type="search" placeholder="Delivery order, name or OEM" /></label>
+        <p class="muted small">Each completed handover records who collected it, who recorded it, the time, and FIFO receipts used.</p>
+        <div id="warehouse-history" aria-live="polite"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ── STUDIO ───────────────────────────────────────────────── -->

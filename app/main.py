@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-from . import auth, cards, db, image_review, importers, inventory_pdf, links, shop_profile, stock_bundle, storage, stock_files, vision
+from . import auth, cards, db, image_review, photo_match, importers, inventory_pdf, links, shop_profile, stock_bundle, storage, stock_files, vision
 from .catalog import match_part, seed_if_empty, seed_images
 from .config import ASSET_DIR, BASE_DIR, EXPORT_DIR, UPLOAD_DIR, WEB_DIR, settings
 from .models import (
@@ -38,6 +38,7 @@ from .models import (
     PartUpdate,
     ShopProfileUpdate,
     StockMovement,
+    DeliveryOrderCreate,
 )
 from .report import render_report
 from .verification_report import build_verification_workbook
@@ -282,6 +283,29 @@ def delete_part(part_id: int) -> Response:
     return Response(status_code=204)
 
 
+@app.get("/api/warehouse/parts/{part_id}/fifo")
+def warehouse_fifo(part_id: int) -> dict:
+    result = db.fifo_for(part_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="part not found")
+    return result
+
+
+@app.get("/api/warehouse/delivery-orders")
+def warehouse_history(q: str = Query("", max_length=160), limit: int = Query(100, ge=1, le=500)) -> list[dict]:
+    return db.delivery_orders(query=q, limit=limit)
+
+
+@app.post("/api/warehouse/delivery-orders", status_code=201)
+def warehouse_handover(payload: DeliveryOrderCreate, request: Request) -> dict:
+    user = getattr(request.state, "auth_user", None) or {}
+    try:
+        return db.create_delivery_order(payload.order_number, payload.collected_by, user.get("email", ""),
+                                        payload.note, [line.model_dump() for line in payload.lines])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/parts/{part_id}/adjust", response_model=InventoryPart)
 def adjust_stock(part_id: int, movement: StockMovement) -> InventoryPart:
     try:
@@ -395,9 +419,19 @@ async def identify(request: Request, file: UploadFile = File(...)) -> IdentifyRe
         raise HTTPException(status_code=415, detail=f"unsupported image type: {mime}")
 
     path, normalised = _store_upload(raw, file.filename or "upload.jpg")
-    report = vision.identify(normalised, "image/jpeg")
+    # Always check local stock first. A clear but still unverified local match
+    # avoids sending this photo to an external provider.
+    photo_candidates = photo_match.suggestions(normalised)
+    local = photo_match.clear_local_report(photo_candidates)
+    if local:
+        report, matched = local
+        candidate_parts = [candidate["part"] for candidate in photo_candidates]
+    else:
+        report = vision.identify(normalised, "image/jpeg")
+        matched, candidates = match_part(report)
+        candidate_parts = [candidate.part for candidate in candidates]
+        report.warnings.insert(0, "No clear local photo match; the configured identifier was used.")
 
-    matched, candidates = match_part(report)
     if matched is not None:
         # Never silently adopt the catalogue's numbers: say when they differ.
         if report.oem_part_number and matched.oem_part_number and (
@@ -428,7 +462,8 @@ async def identify(request: Request, file: UploadFile = File(...)) -> IdentifyRe
         google_search_url=gimages,
         report=report,
         matched_part=matched,
-        candidates=[m.part for m in candidates],
+        candidates=candidate_parts,
+        photo_candidates=photo_candidates,
         report_markdown=render_report(report, matched, caption=caption),
     )
 

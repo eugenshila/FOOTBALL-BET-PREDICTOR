@@ -209,7 +209,10 @@ should be embedded in an Excel `.xlsx` file rather than a PDF.
 
 Drop or shoot a photo and the engine identifies it immediately — no button press
 needed (the *Auto-detect on upload* toggle is on by default; uncheck it to review
-photos before spending API quota).
+photos before spending API quota). Each upload first checks local inventory photos.
+A close, unambiguous local suggestion avoids the configured external identifier;
+otherwise the configured provider is used and may send the photo externally.
+Local suggestions always require human confirmation.
 
 Three ways to get a real identification, in order of what I'd recommend:
 
@@ -223,7 +226,7 @@ the default provider becomes `gemini-grounded`:
 echo 'GEMINI_API_KEY=your-key-here' >> .env
 ```
 
-Each upload then does this in **one request**: the model looks at the photo,
+When no clear local photo suggestion is found, the model looks at the photo,
 runs up to four Google searches (`"<part> OEM number"`, `"<part> part number
 <vehicle>"`), and returns the part number **with the pages it found it on**.
 The UI shows those sources as clickable links under the report, so staff can
@@ -472,3 +475,35 @@ Copy `.env.example` to `.env` and load it (or export the vars). Highlights:
 
 Code: MIT. Fonts: Barlow / Barlow Condensed under the SIL Open Font License
 (`assets/fonts/OFL.txt`).
+
+### Photo-assisted receiving and delivery handovers
+
+On **Identify a part**, a photo is first compared with locally available inventory
+photos and catalogue images that can be linked to a stock record by part number.
+A close, unambiguous local match skips the configured identifier; if the local
+match is missing, weak or ambiguous, the configured provider is used (which may
+send the photo externally). The report states which path was used.
+The visual fingerprint is only a suggestion: lighting, angles and similar-looking
+parts can mislead it. Check the part and OEM/fitment, choose the right record,
+enter the received quantity and confirm before stock is increased. Missing,
+remote or unreadable reference images are skipped. Scanning records a scan and
+stores the uploaded photo; it does not automatically change stock or replace a
+catalogue photo.
+
+Use **Warehouse** to record a completed handover (there is no pick-and-pack
+stage). Search for parts, add one or more lines, enter a unique delivery-order
+number and the name of the person collecting the parts, then confirm the
+handover. The app records the signed-in account, UTC handover time, parts and
+quantities, optional note and the FIFO receipt allocations. The order history is
+searchable by order number, collector, issuer, part name or OEM. A delivery
+order is saved once; attempting to reuse its number is rejected. All its lines
+are deducted together or none are, and insufficient stock is rejected.
+
+FIFO is based on the order of stock movement records, not on visual appearance
+or expiry dates. Older quantities without reliable movement history are shown as
+**unknown opening stock** and consumed before dated receipts; their original
+receipt dates cannot be reconstructed. For an accurate physical FIFO workflow,
+warehouse staff must take the oldest corresponding physical stock. The order
+history retains part details even if the inventory record is subsequently
+removed. Existing stock and movement rows are not rewritten to enable this
+feature; new delivery-order tables are created on startup.
